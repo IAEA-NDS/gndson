@@ -1,20 +1,17 @@
 """
 Canonical JSON dict -> XML, per spec.md.
 
-Iteration 2 — supports everything in iteration 1, plus:
-  - _cdata: emit listed child tags' text inside <![CDATA[...]]>.
+Iteration 2c — supports everything before, plus:
+  - _comments + _order: comments preserved at the right positions among siblings.
+  - _text as list of strings: text split by comments inside text-only elements.
 
-Iteration 1 baseline:
-  - Elements, attributes, text content
-  - Top-level root-tag unwrapping (spec §3)
-  - Bare-string and object element forms (§1)
-  - Scalar and list child values (§1)
-  - _text key as a string (§2)
-  - _xml declaration metadata (§3)
-  - Entity escaping in text and attribute values (§8)
+Earlier iterations:
+  - 2b: _cdata
+  - 1:  elements/attrs/text, bare-string and object forms, scalar-vs-list,
+        _text for text+attrs, _xml, root-tag unwrap, entity escaping.
 
 Not yet implemented:
-  - _comments / _order, _nocollapse, _text-as-list, _attrorder.
+  - _nocollapse, _attrorder.
 """
 
 from typing import Any, Dict, FrozenSet, List, Tuple
@@ -77,7 +74,8 @@ def _emit_element(
     """Emit a single XML element from its tag name and canonical-form value.
 
     ``as_cdata`` is supplied by the parent: if True, the element's text content
-    is emitted inside ``<![CDATA[...]]>`` rather than entity-escaped.
+    is emitted inside ``<![CDATA[...]]>`` rather than entity-escaped. When the
+    text is a list of segments (comment-split), every segment is CDATA-wrapped.
     """
     # Bare-string case: pure text content, no attrs, no children, no comments.
     if isinstance(value, str):
@@ -92,32 +90,125 @@ def _emit_element(
             f"got {type(value).__name__}"
         )
 
-    attrs, text, children, child_cdata_tags = _split_object(value, tag=tag)
+    parts = _split_object(value, tag=tag)
 
     attr_str = "".join(
-        f' {name}="{codec.encode_attr(val)}"' for name, val in attrs
+        f' {name}="{codec.encode_attr(val)}"' for name, val in parts.attrs
     )
 
-    # Empty element: no children, no text content.
-    if not children and text is None:
+    # Empty element: no children, no text content, no comments,
+    # and either no _order or an empty _order.
+    if (
+        not parts.children
+        and parts.text is None
+        and not parts.comments
+        and not parts.order  # None or empty list both OK
+    ):
         return f"<{tag}{attr_str}/>"
 
-    inner_parts: List[str] = []
-    if text is not None:
-        inner_parts.append(_wrap_text(text, as_cdata=as_cdata, codec=codec))
-    for child_tag, child_val in children:
-        child_as_cdata = child_tag in child_cdata_tags
-        if isinstance(child_val, list):
-            for v in child_val:
-                inner_parts.append(
-                    _emit_element(child_tag, v, codec=codec, as_cdata=child_as_cdata)
+    body = _emit_body(tag, parts, as_cdata=as_cdata, codec=codec)
+    return f"<{tag}{attr_str}>{body}</{tag}>"
+
+
+def _emit_body(
+    tag: str, parts: "_Parts", *, as_cdata: bool, codec: EntityCodec
+) -> str:
+    """Emit the inner XML content of an element, honoring `_order` if present."""
+    if parts.order is None:
+        # No `_order`: emit text (if any), then children in JSON insertion order.
+        # In this branch, there are no comments and `_text` is a string (or absent).
+        out: List[str] = []
+        if parts.text is not None:
+            if not isinstance(parts.text, str):
+                raise MalformedJsonError(
+                    f"<{tag}>: _text must be a string when _order is absent"
                 )
+            out.append(_wrap_text(parts.text, as_cdata=as_cdata, codec=codec))
+        for child_tag, child_val in parts.children:
+            child_as_cdata = child_tag in parts.cdata_tags
+            for v in _iter_child_values(child_val):
+                out.append(_emit_element(child_tag, v, codec=codec, as_cdata=child_as_cdata))
+        return "".join(out)
+
+    # `_order` is present. Walk it, consuming from the per-source lists.
+    out: List[str] = []
+    text_idx = 0
+    comment_idx = 0
+    # Pre-index children for O(1) lookup.
+    children_by_tag: Dict[str, list] = {}
+    child_idx: Dict[str, int] = {}
+    for child_tag, child_val in parts.children:
+        children_by_tag[child_tag] = list(_iter_child_values(child_val))
+        child_idx[child_tag] = 0
+
+    # `_text` may be a string or a list. If it's a string, _order should not
+    # contain any "_text" markers (the canonical form puts the string into
+    # implicit position before any comments). We accept either shape but
+    # validate consumption below.
+    text_list = (
+        parts.text if isinstance(parts.text, list)
+        else ([parts.text] if isinstance(parts.text, str) else [])
+    )
+
+    for entry in parts.order:
+        if entry == "_text":
+            if text_idx >= len(text_list):
+                raise MalformedJsonError(
+                    f"<{tag}>: _order has more '_text' markers than _text entries"
+                )
+            out.append(_wrap_text(text_list[text_idx], as_cdata=as_cdata, codec=codec))
+            text_idx += 1
+        elif entry == "_comment":
+            if comment_idx >= len(parts.comments):
+                raise MalformedJsonError(
+                    f"<{tag}>: _order has more '_comment' markers than _comments entries"
+                )
+            out.append(_emit_comment(parts.comments[comment_idx]))
+            comment_idx += 1
         else:
-            inner_parts.append(
-                _emit_element(child_tag, child_val, codec=codec, as_cdata=child_as_cdata)
+            tag_name = entry
+            if tag_name not in children_by_tag:
+                raise MalformedJsonError(
+                    f"<{tag}>: _order references unknown child tag {tag_name!r}"
+                )
+            idx = child_idx[tag_name]
+            vals = children_by_tag[tag_name]
+            if idx >= len(vals):
+                raise MalformedJsonError(
+                    f"<{tag}>: _order references more occurrences of <{tag_name}> "
+                    "than exist in the JSON"
+                )
+            child_as_cdata = tag_name in parts.cdata_tags
+            out.append(_emit_element(tag_name, vals[idx], codec=codec, as_cdata=child_as_cdata))
+            child_idx[tag_name] = idx + 1
+
+    # Consumption validation: everything must have been used exactly once.
+    if text_idx != len(text_list):
+        raise MalformedJsonError(
+            f"<{tag}>: _order has fewer '_text' markers than _text entries"
+        )
+    if comment_idx != len(parts.comments):
+        raise MalformedJsonError(
+            f"<{tag}>: _order has fewer '_comment' markers than _comments entries"
+        )
+    for child_tag, vals in children_by_tag.items():
+        if child_idx[child_tag] != len(vals):
+            raise MalformedJsonError(
+                f"<{tag}>: _order does not reference all occurrences of "
+                f"<{child_tag}> ({child_idx[child_tag]} / {len(vals)})"
             )
 
-    return f"<{tag}{attr_str}>{''.join(inner_parts)}</{tag}>"
+    return "".join(out)
+
+
+def _iter_child_values(child_val):
+    """Yield child value(s) — flattening a JSON list (multi-occurrence form)
+    and passing scalars through as a single-item iterable."""
+    if isinstance(child_val, list):
+        for v in child_val:
+            yield v
+    else:
+        yield child_val
 
 
 def _wrap_text(text: str, *, as_cdata: bool, codec: EntityCodec) -> str:
@@ -130,14 +221,35 @@ def _wrap_text(text: str, *, as_cdata: bool, codec: EntityCodec) -> str:
     return codec.encode_text(text)
 
 
-def _split_object(
-    value: Dict[str, Any], *, tag: str
-) -> Tuple[List[Tuple[str, str]], Any, List[Tuple[str, Any]], FrozenSet[str]]:
-    """Split an object-form value into (attrs, text, children, cdata_tags) parts."""
-    attrs: List[Tuple[str, str]] = []
-    text: Any = None
-    children: List[Tuple[str, Any]] = []
-    cdata_tags: FrozenSet[str] = frozenset()
+def _emit_comment(text: str) -> str:
+    """Emit `<!--text-->`, validating that `text` doesn't violate XML comment rules."""
+    if "--" in text:
+        raise MalformedJsonError(
+            f"comment text contains the forbidden substring '--': {text!r}"
+        )
+    if text.endswith("-"):
+        raise MalformedJsonError(
+            f"comment text ends with '-' (would produce '--->'): {text!r}"
+        )
+    return f"<!--{text}-->"
+
+
+# Parsed object value — internal struct used by the emit functions.
+class _Parts:
+    __slots__ = ("attrs", "text", "children", "cdata_tags", "comments", "order")
+
+    def __init__(self):
+        self.attrs: List[Tuple[str, str]] = []
+        self.text: Any = None
+        self.children: List[Tuple[str, Any]] = []
+        self.cdata_tags: FrozenSet[str] = frozenset()
+        self.comments: List[str] = []
+        self.order: List[str] = None  # None means "no _order key"
+
+
+def _split_object(value: Dict[str, Any], *, tag: str) -> "_Parts":
+    """Split an object-form value into the various parts used by the emitter."""
+    parts = _Parts()
     for key, val in value.items():
         if key.startswith(ATTR_PREFIX):
             if not isinstance(val, str):
@@ -145,25 +257,38 @@ def _split_object(
                     f"<{tag}> attribute {key!r}: value must be a string, "
                     f"got {type(val).__name__}"
                 )
-            attrs.append((key[len(ATTR_PREFIX):], val))
+            parts.attrs.append((key[len(ATTR_PREFIX):], val))
         elif key == "_text":
-            if not isinstance(val, str):
-                # List form (text split by comments) is a later iteration.
+            if isinstance(val, str):
+                parts.text = val
+            elif isinstance(val, list) and all(isinstance(s, str) for s in val):
+                parts.text = val
+            else:
                 raise MalformedJsonError(
-                    f"<{tag}> _text must be a string in this iteration "
-                    "(list form not yet supported)"
+                    f"<{tag}> _text must be a string or list of strings"
                 )
-            text = val
+        elif key == "_comments":
+            if not isinstance(val, list) or not all(isinstance(c, str) for c in val):
+                raise MalformedJsonError(
+                    f"<{tag}> _comments must be a list of strings"
+                )
+            parts.comments = val
+        elif key == "_order":
+            if not isinstance(val, list) or not all(isinstance(e, str) for e in val):
+                raise MalformedJsonError(
+                    f"<{tag}> _order must be a list of strings"
+                )
+            parts.order = val
         elif key == "_cdata":
             if not isinstance(val, list) or not all(isinstance(t, str) for t in val):
                 raise MalformedJsonError(
                     f"<{tag}> _cdata must be a list of strings"
                 )
-            cdata_tags = frozenset(val)
+            parts.cdata_tags = frozenset(val)
         elif key in RESERVED_META:
             raise MalformedJsonError(
                 f"<{tag}>: meta key {key!r} not yet supported in this iteration"
             )
         else:
-            children.append((key, val))
-    return attrs, text, children, cdata_tags
+            parts.children.append((key, val))
+    return parts

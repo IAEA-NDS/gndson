@@ -132,9 +132,9 @@ class TestSerializer:
             to_xml_string({"a": {}, "b": {}})
 
     def test_unsupported_meta_key_rejected(self):
-        # _order etc. not yet supported in this iteration; _cdata IS supported.
+        # _nocollapse / _attrorder are not yet supported in this iteration.
         with pytest.raises(MalformedJsonError):
-            to_xml_string({"r": {"_order": ["x"], "x": ""}})
+            to_xml_string({"r": {"_nocollapse": ["x"], "x": ""}})
 
 
 # ===== Synthetic round-trip cases (within iteration-1 scope) =====
@@ -230,14 +230,127 @@ class TestCdata:
         b'<?xml version="1.0" encoding="UTF-8"?>\n<r><x><![CDATA[a]]></x><x><![CDATA[b]]></x><y>plain</y></r>',
     ])
     def test_round_trip_cdata(self, xml):
-        # Strict XML-equivalence round trip via the faithful tree comparator.
-        import sys
-        from pathlib import Path
-        sys.path.insert(0, str(Path(__file__).parent))
-        from xml_compare import parse_faithful, diff_summary
-        faithful_a = parse_faithful(xml)
-        d = parse_xml_bytes(xml)
-        re_xml = to_xml_string(d).encode("utf-8")
-        faithful_b = parse_faithful(re_xml)
-        diff = diff_summary(faithful_a, faithful_b)
-        assert not diff, diff
+        _assert_round_trip(xml)
+
+
+# ===== Comments + _order + text-split (iteration 2c) =====
+
+class TestComments:
+    def test_parse_comment_between_siblings(self):
+        result = parse_xml_bytes(b'<r><a/><!-- mid --><b/></r>')
+        assert result["r"] == {
+            "_order": ["a", "_comment", "b"],
+            "_comments": [" mid "],
+            "a": "",
+            "b": "",
+        }
+
+    def test_parse_only_comment_in_container(self):
+        result = parse_xml_bytes(b'<r><!-- only --><a/></r>')
+        assert result["r"] == {
+            "_order": ["_comment", "a"],
+            "_comments": [" only "],
+            "a": "",
+        }
+
+    def test_parse_multiple_adjacent_comments(self):
+        result = parse_xml_bytes(b'<r><!-- a --><!-- b --><x/></r>')
+        assert result["r"]["_order"] == ["_comment", "_comment", "x"]
+        assert result["r"]["_comments"] == [" a ", " b "]
+
+    def test_parse_text_split_by_comment_uses_list_text(self):
+        # The <data>-style case from the GNDS corpus.
+        result = parse_xml_bytes(b'<r><data>  <!-- header -->1 2 3</data></r>')
+        assert result["r"] == {
+            "data": {
+                "_order": ["_text", "_comment", "_text"],
+                "_text": ["  ", "1 2 3"],
+                "_comments": [" header "],
+            }
+        }
+
+    def test_parse_no_order_when_no_comment_and_no_interleave(self):
+        # [a, a, b, b] is grouped — no _order needed.
+        result = parse_xml_bytes(b'<r><a/><a/><b/><b/></r>')
+        assert "_order" not in result["r"]
+        assert result["r"]["a"] == ["", ""]
+        assert result["r"]["b"] == ["", ""]
+
+    def test_parse_order_emitted_when_distinct_tags_interleave(self):
+        # [a, b, a] is interleaved — _order required.
+        result = parse_xml_bytes(b'<r><a>1</a><b>2</b><a>3</a></r>')
+        assert result["r"]["_order"] == ["a", "b", "a"]
+        assert result["r"]["a"] == ["1", "3"]
+        assert result["r"]["b"] == "2"
+
+    def test_comment_outside_root_dropped(self):
+        # Spec §6: comments outside the root element are not preserved.
+        result = parse_xml_bytes(b'<!-- before --><r/><!-- after -->')
+        assert "_comments" not in result.get("r", {}) or result["r"] == ""
+        # Whatever the encoding, the comment text must not appear anywhere.
+        assert result["r"] == ""
+
+    def test_serialize_comment_between_siblings(self):
+        data = {
+            "r": {
+                "_order": ["a", "_comment", "b"],
+                "_comments": [" mid "],
+                "a": "",
+                "b": "",
+            }
+        }
+        xml = to_xml_string(data)
+        assert "<a/><!-- mid --><b/>" in xml
+
+    def test_serialize_text_split_by_comment(self):
+        data = {
+            "r": {
+                "data": {
+                    "_order": ["_text", "_comment", "_text"],
+                    "_text": ["  ", "1 2 3"],
+                    "_comments": [" header "],
+                }
+            }
+        }
+        xml = to_xml_string(data)
+        assert "<data>  <!-- header -->1 2 3</data>" in xml
+
+    def test_serialize_comment_double_dash_rejected(self):
+        with pytest.raises(MalformedJsonError):
+            to_xml_string({"r": {"_order": ["_comment"], "_comments": ["a -- b"]}})
+
+    def test_serialize_order_too_few_comment_markers_rejected(self):
+        # _comments has 2 entries; _order has only 1 "_comment" marker.
+        with pytest.raises(MalformedJsonError):
+            to_xml_string({
+                "r": {"_order": ["_comment"], "_comments": ["a", "b"]}
+            })
+
+    def test_serialize_order_references_unknown_child_rejected(self):
+        with pytest.raises(MalformedJsonError):
+            to_xml_string({"r": {"_order": ["nonexistent"]}})
+
+    @pytest.mark.parametrize("xml", [
+        b'<?xml version="1.0" encoding="UTF-8"?>\n<r><!-- c --><a/></r>',
+        b'<?xml version="1.0" encoding="UTF-8"?>\n<r><a/><!-- c --><b/></r>',
+        b'<?xml version="1.0" encoding="UTF-8"?>\n<r><!-- a --><!-- b --><x/></r>',
+        b'<?xml version="1.0" encoding="UTF-8"?>\n<r><a>1</a><b>2</b><a>3</a></r>',
+        b'<?xml version="1.0" encoding="UTF-8"?>\n<r><data>  <!-- header -->1 2 3</data></r>',
+        b'<?xml version="1.0" encoding="UTF-8"?>\n<r><data><!-- h -->only</data></r>',
+    ])
+    def test_round_trip_comments(self, xml):
+        _assert_round_trip(xml)
+
+
+def _assert_round_trip(xml: bytes) -> None:
+    """Strict XML-equivalence round-trip via the faithful tree comparator."""
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).parent))
+    from xml_compare import parse_faithful, diff_summary
+    faithful_a = parse_faithful(xml)
+    d = parse_xml_bytes(xml)
+    re_xml = to_xml_string(d).encode("utf-8")
+    faithful_b = parse_faithful(re_xml)
+    diff = diff_summary(faithful_a, faithful_b)
+    assert not diff, diff

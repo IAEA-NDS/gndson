@@ -1,22 +1,19 @@
 """
 XML -> canonical JSON dict, per spec.md.
 
-Iteration 2 — supports everything in iteration 1, plus:
-  - _cdata: CDATA section detection on read; per-tag granularity per parent.
+Iteration 2c — supports everything before, plus:
+  - _comments: preserved XML comments
+  - _order: explicit sibling ordering when comments are present or distinct
+    child tags interleave
+  - _text as list: text content split by comments inside a text-only element
 
-Iteration 1 baseline:
-  - Elements, attributes, text content (incl. attribute order)
-  - Top-level root-tag wrapping (spec §3)
-  - Bare-string shortcut for text-only-no-attr-no-children elements (§1)
-  - Object form with @-prefixed attributes (§1)
-  - Scalar-vs-list child encoding by count (§1)
-  - _text key for text alongside attributes (§2; reserved case B1)
-  - _xml declaration metadata (§3)
+Earlier iterations:
+  - 2b: _cdata
+  - 1:  elements/attrs/text, bare-string shortcut, scalar-vs-list,
+        _text for text+attrs, _xml declaration, root-tag wrap.
 
-Not yet implemented (planned for later iterations):
-  - _comments / _order (comment preservation)
+Not yet implemented:
   - _nocollapse (explicit <x></x> vs <x/> distinction)
-  - _text as list (text split by comments)
   - _attrorder (cosmetic attribute order)
 """
 
@@ -101,6 +98,7 @@ class _XmlToJson:
         p.CharacterDataHandler = self._on_chars
         p.StartCdataSectionHandler = self._on_start_cdata
         p.EndCdataSectionHandler = self._on_end_cdata
+        p.CommentHandler = self._on_comment
         p.XmlDeclHandler = self._on_xml_decl
         p.ProcessingInstructionHandler = self._on_pi
         p.StartDoctypeDeclHandler = self._on_doctype
@@ -168,6 +166,14 @@ class _XmlToJson:
         if self.stack:
             self.stack[-1].set_cdata_state(False)
 
+    def _on_comment(self, text: str) -> None:
+        # Comments outside the root element are not preserved (spec §6).
+        if not self.stack:
+            return
+        # A comment breaks the current text run.
+        self.stack[-1].flush_text()
+        self.stack[-1].children.append(("comment", text))
+
     def _on_end(self, _name: str) -> None:
         record = self.stack.pop()
         record.flush_text()
@@ -199,19 +205,13 @@ class _XmlToJson:
         True iff the element's text content came entirely from CDATA
         sections; the caller (the parent) uses it to populate ``_cdata``.
         """
-        elem_children = [
-            payload for kind, payload in record.children if kind == "elem"
-        ]
-        plain_segments = [
-            payload for kind, payload in record.children if kind == "text"
-        ]
-        cdata_segments = [
-            payload for kind, payload in record.children if kind == "cdata_text"
-        ]
+        has_elem = any(k == "elem" for k, _ in record.children)
+        has_comment = any(k == "comment" for k, _ in record.children)
+        plain_segments = [p for k, p in record.children if k == "text"]
+        cdata_segments = [p for k, p in record.children if k == "cdata_text"]
 
-        # Mixed-content check: element + non-whitespace text is forbidden by GNDS
-        # and out of scope. Inter-element whitespace is silently dropped.
-        if elem_children:
+        # Mixed-content check (text+element-children is forbidden by GNDS).
+        if has_elem:
             for seg in plain_segments:
                 if seg.strip():
                     raise MixedContentError(
@@ -223,47 +223,95 @@ class _XmlToJson:
                     f"Element <{record.tag}> contains both CDATA text and element "
                     "children (mixed content is out of scope)"
                 )
-            plain_segments = []
 
-        # Determine THIS element's text content and its CDATA-ness.
-        text_combined, self_is_cdata = self._classify_text(
-            record.tag, plain_segments, cdata_segments
-        )
+        # Classify the element's own text-CDATA-ness (only meaningful when
+        # the element has no element children — otherwise its "text" is
+        # just inter-tag whitespace).
+        if has_elem:
+            self_is_cdata = False
+            text_combined = ""
+        else:
+            text_combined, self_is_cdata = self._classify_text(
+                record.tag, plain_segments, cdata_segments
+            )
 
         # Bare-string shortcut: no attrs, no element children, no comments.
-        if not record.attrs and not elem_children:
+        if not record.attrs and not has_elem and not has_comment:
             return text_combined, self_is_cdata
 
-        # Object form.
+        # Object form. Walk children in document order, building parallel
+        # structures: grouped element children, _order entries, _comments,
+        # text segments (used only when text-only-with-comments).
         result: Dict[str, Any] = {}
         for aname, aval in record.attrs.items():
             result[ATTR_PREFIX + aname] = aval
 
-        # Group child elements by tag, preserving first-occurrence order.
-        # Verify per-tag CDATA consistency along the way.
+        order_entries: List[str] = []
+        comments_list: List[str] = []
+        text_segments_in_order: List[str] = []
         grouped: Dict[str, list] = {}
         child_cdata_state: Dict[str, bool] = {}
-        for tagname, val, child_is_cdata in elem_children:
-            if tagname in child_cdata_state:
-                if child_cdata_state[tagname] != child_is_cdata:
-                    raise CdataInconsistencyError(
-                        f"<{record.tag}>: child <{tagname}> has inconsistent "
-                        "CDATA-ness across occurrences (some CDATA, some plain)"
-                    )
-            else:
-                child_cdata_state[tagname] = child_is_cdata
-            grouped.setdefault(tagname, []).append(val)
+        elem_tag_seq: List[str] = []
+
+        for kind, payload in record.children:
+            if kind == "elem":
+                tagname, val, child_is_cdata = payload
+                if tagname in child_cdata_state:
+                    if child_cdata_state[tagname] != child_is_cdata:
+                        raise CdataInconsistencyError(
+                            f"<{record.tag}>: child <{tagname}> has inconsistent "
+                            "CDATA-ness across occurrences"
+                        )
+                else:
+                    child_cdata_state[tagname] = child_is_cdata
+                grouped.setdefault(tagname, []).append(val)
+                order_entries.append(tagname)
+                elem_tag_seq.append(tagname)
+            elif kind == "comment":
+                comments_list.append(payload)
+                order_entries.append("_comment")
+            elif kind in ("text", "cdata_text"):
+                if has_elem:
+                    # Already verified inter-tag whitespace; drop here.
+                    continue
+                # Text-only element: accumulate as a positional segment.
+                # We always include the segment even if empty-string — the
+                # parser only generates non-empty text runs (flush_text
+                # skips empty pending_text), so payload is non-empty here.
+                text_segments_in_order.append(payload)
+                order_entries.append("_text")
+
+        # Place grouped child elements into the result (insertion order
+        # follows first-encounter of each tag).
         for tagname, vals in grouped.items():
             result[tagname] = vals[0] if len(vals) == 1 else vals
 
-        # Text alongside attributes (text+attrs case, spec §2 _text).
-        if record.attrs and not elem_children and text_combined:
-            result["_text"] = text_combined
+        # Text content placement.
+        if has_elem:
+            pass  # no text in container element
+        elif has_comment:
+            # Text-only with comments: always use list form so positions
+            # are unambiguous (matched to "_text" markers in _order).
+            if text_segments_in_order:
+                result["_text"] = text_segments_in_order
+        elif record.attrs:
+            # Text + attrs, no children, no comments → string form.
+            if text_combined:
+                result["_text"] = text_combined
 
-        # _cdata: list of child tag names whose text was CDATA-encoded.
+        # Meta keys (only when needed).
+        if comments_list:
+            result["_comments"] = comments_list
+
         cdata_tags = [t for t, was_cdata in child_cdata_state.items() if was_cdata]
         if cdata_tags:
             result["_cdata"] = cdata_tags
+
+        needs_order = has_comment or (
+            has_elem and not _is_grouped(elem_tag_seq)
+        )
+        if needs_order:
+            result["_order"] = order_entries
 
         return result, self_is_cdata
 
@@ -273,9 +321,9 @@ class _XmlToJson:
     ) -> Tuple[str, bool]:
         """Combine text segments and decide whether the element's text is CDATA.
 
-        - All-plain (or no text):       (combined, False)
+        - All-plain (or no text):        (combined, False)
         - All-CDATA (no plain segments): (combined, True)
-        - Mixed (any plain AND any CDATA): error
+        - Mixed (any plain AND any CDATA): error.
         """
         has_plain = any(s for s in plain_segments)
         has_cdata = any(s for s in cdata_segments)
@@ -287,3 +335,23 @@ class _XmlToJson:
         if has_cdata:
             return "".join(cdata_segments), True
         return "".join(plain_segments), False
+
+
+def _is_grouped(tag_sequence: List[str]) -> bool:
+    """True iff each distinct tag in `tag_sequence` occurs as one consecutive run.
+
+    [a, a, b, b]   -> True
+    [a, b, a, b]   -> False (a returns after b)
+    [a, b, b, a]   -> False
+    [a, a, b, a]   -> False
+    """
+    seen = set()
+    current = None
+    for t in tag_sequence:
+        if t == current:
+            continue
+        if t in seen:
+            return False
+        seen.add(t)
+        current = t
+    return True
