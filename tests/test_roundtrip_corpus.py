@@ -1,17 +1,17 @@
 """
 Corpus round-trip test driver.
 
-Walks a user-supplied directory of GNDS XML files and for each file:
-  1. parse XML        -> JSON_1
-  2. serialize JSON_1 -> re-XML
-  3. parse re-XML     -> JSON_2
-  4. assert JSON_1 == JSON_2
+Walks a user-supplied directory of GNDS XML files. For each file:
+  1. parse the ORIGINAL XML into a faithful (lossless) tree (xml_compare)
+  2. translate ORIGINAL XML -> JSON via gndson.parse
+  3. untranslate JSON -> re-XML via gndson.to_xml_string
+  4. parse the RE-XML into a faithful tree
+  5. assert the two faithful trees are equal per spec §9 (XML-equivalent)
 
-NB: JSON stability is NECESSARY but not SUFFICIENT for true round-trip.
-If the parser is currently lossy for some XML feature (e.g. drops comments
-in an early iteration), both parses agree on the lossy form and the test
-passes deceptively. A stricter XML-equivalence check belongs to a later
-iteration. See spec §9.
+This is a STRICT round-trip check: equality on faithful trees fails if
+any spec-relevant information was lost in the JSON form. Inter-tag
+whitespace, self-closing-vs-pair, attribute order, attribute quote, and
+minimal entity escaping are ignored — everything else must match.
 
 Usage (pytest):
     pytest --gnds-corpus /path/to/corpus
@@ -32,6 +32,8 @@ import pytest
 
 import gndson
 
+from xml_compare import parse_faithful, diff_summary
+
 
 # ----- core driver -----
 
@@ -46,27 +48,34 @@ def list_corpus_files(corpus_root: Path):
 
 
 def round_trip_one(path: Path):
-    """Run the round-trip on one file. Returns (ok: bool, reason: str)."""
+    """Run the strict round-trip on one file. Returns (ok: bool, reason: str)."""
     try:
-        json_1 = gndson.parse_xml_file(str(path))
-    except gndson.GndsonError as e:
-        return False, f"parse: {type(e).__name__}: {e}"
+        original_bytes = path.read_bytes()
     except Exception as e:
-        return False, f"parse-unexpected: {type(e).__name__}: {e}"
+        return False, f"read: {type(e).__name__}: {e}"
+    try:
+        faithful_original = parse_faithful(original_bytes)
+    except Exception as e:
+        return False, f"faithful-parse: {type(e).__name__}: {e}"
+    try:
+        json_1 = gndson.parse_xml_bytes(original_bytes)
+    except gndson.GndsonError as e:
+        return False, f"translate: {type(e).__name__}: {e}"
+    except Exception as e:
+        return False, f"translate-unexpected: {type(e).__name__}: {e}"
     try:
         xml_text = gndson.to_xml_string(json_1)
     except gndson.GndsonError as e:
-        return False, f"serialize: {type(e).__name__}: {e}"
+        return False, f"untranslate: {type(e).__name__}: {e}"
     except Exception as e:
-        return False, f"serialize-unexpected: {type(e).__name__}: {e}"
+        return False, f"untranslate-unexpected: {type(e).__name__}: {e}"
     try:
-        json_2 = gndson.parse_xml_bytes(xml_text.encode("utf-8"))
-    except gndson.GndsonError as e:
-        return False, f"reparse: {type(e).__name__}: {e}"
+        faithful_reemit = parse_faithful(xml_text.encode("utf-8"))
     except Exception as e:
-        return False, f"reparse-unexpected: {type(e).__name__}: {e}"
-    if json_1 != json_2:
-        return False, "mismatch"
+        return False, f"reemit-parse: {type(e).__name__}: {e}"
+    if faithful_original != faithful_reemit:
+        diff = diff_summary(faithful_original, faithful_reemit)
+        return False, f"xml-diff: {diff}"
     return True, ""
 
 
