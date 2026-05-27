@@ -1,20 +1,19 @@
 """
 XML -> canonical JSON dict, per spec.md.
 
-Iteration 2c — supports everything before, plus:
-  - _comments: preserved XML comments
-  - _order: explicit sibling ordering when comments are present or distinct
-    child tags interleave
-  - _text as list: text content split by comments inside a text-only element
+Iteration 2d — supports everything before, plus:
+  - _nocollapse: track which empty children were written in pair form
+    (`<x></x>`) rather than self-closing (`<x/>`).
 
 Earlier iterations:
+  - 2c: _comments, _order, _text-as-list (text split by comments)
   - 2b: _cdata
   - 1:  elements/attrs/text, bare-string shortcut, scalar-vs-list,
         _text for text+attrs, _xml declaration, root-tag wrap.
 
-Not yet implemented:
-  - _nocollapse (explicit <x></x> vs <x/> distinction)
-  - _attrorder (cosmetic attribute order)
+Note: _attrorder is supported on the SERIALIZER side only — the parser
+does not emit it because JSON insertion order already preserves the
+attribute order from the source XML.
 """
 
 import xml.parsers.expat as expat
@@ -46,19 +45,24 @@ def parse_xml_bytes(data: bytes) -> Dict[str, Any]:
 class _ElementRecord:
     """Mutable state held on the stack during parsing of a single element."""
 
-    __slots__ = ("tag", "attrs", "children", "pending_text", "pending_is_cdata")
+    __slots__ = (
+        "tag", "attrs", "children", "pending_text", "pending_is_cdata", "start_byte",
+    )
 
-    def __init__(self, tag: str, attrs: Dict[str, str]) -> None:
+    def __init__(self, tag: str, attrs: Dict[str, str], start_byte: int) -> None:
         self.tag = tag
         self.attrs = attrs
         # Children list of (kind, payload):
         #   ("text", str)                            — plain-text run
         #   ("cdata_text", str)                      — CDATA-section text run
-        #   ("elem", (tagname, encoded_value, child_is_cdata))
-        # Later iterations add: ("comment", str).
+        #   ("comment", str)                         — XML comment
+        #   ("elem", (tagname, encoded_value, child_is_cdata, child_was_pair))
         self.children: List[Tuple[str, Any]] = []
         self.pending_text = ""
         self.pending_is_cdata = False
+        # Byte offset of the start tag in the source — used to discriminate
+        # self-closing (<x/>) from pair-form (<x></x>) empty elements.
+        self.start_byte = start_byte
 
     def flush_text(self) -> None:
         if self.pending_text:
@@ -72,9 +76,13 @@ class _ElementRecord:
             self.flush_text()
             self.pending_is_cdata = in_cdata
 
-    def add_elem(self, tagname: str, value: Any, child_is_cdata: bool) -> None:
+    def add_elem(
+        self, tagname: str, value: Any, child_is_cdata: bool, child_was_pair: bool
+    ) -> None:
         self.flush_text()
-        self.children.append(("elem", (tagname, value, child_is_cdata)))
+        self.children.append(
+            ("elem", (tagname, value, child_is_cdata, child_was_pair))
+        )
 
 
 class _XmlToJson:
@@ -85,9 +93,13 @@ class _XmlToJson:
         self.root_tag: str = ""
         self.root_encoded: Any = None
         self.xml_decl: Dict[str, str] = {}
+        self._source: bytes = b""
+        self._p: "expat.XMLParserType" = None  # set in parse()
 
     def parse(self, data: bytes) -> Dict[str, Any]:
+        self._source = data
         p = expat.ParserCreate()
+        self._p = p
         # ordered_attributes=1 ⇒ attrs delivered as [name1, val1, name2, val2, ...]
         # in document order. This is the only way to get a stable attribute order.
         p.ordered_attributes = True
@@ -152,7 +164,7 @@ class _XmlToJson:
         if self.stack:
             # Flush any text accumulated in the parent before this child.
             self.stack[-1].flush_text()
-        self.stack.append(_ElementRecord(name, attrs))
+        self.stack.append(_ElementRecord(name, attrs, self._p.CurrentByteIndex))
 
     def _on_chars(self, data: str) -> None:
         if self.stack:
@@ -175,14 +187,33 @@ class _XmlToJson:
         self.stack[-1].children.append(("comment", text))
 
     def _on_end(self, _name: str) -> None:
+        end_byte = self._p.CurrentByteIndex
         record = self.stack.pop()
         record.flush_text()
         encoded, is_cdata = self._encode(record)
+        was_pair = self._was_pair_form(record, end_byte)
         if not self.stack:
             self.root_tag = record.tag
             self.root_encoded = encoded
         else:
-            self.stack[-1].add_elem(record.tag, encoded, is_cdata)
+            self.stack[-1].add_elem(record.tag, encoded, is_cdata, was_pair)
+
+    def _was_pair_form(self, record: _ElementRecord, end_byte: int) -> bool:
+        """Was this element written as <x></x> (pair form, empty body)?
+
+        Only meaningful when the element is empty (no children, no text, no
+        comments). Per spec §5 the two forms are equivalent; we record the
+        choice only so the serializer can faithfully reproduce it when the
+        user populates `_nocollapse`.
+        """
+        if record.children or record.pending_text:
+            # Non-empty element; serializer never collapses to <x/> anyway.
+            return False
+        # bytes[start:end] is the opening tag's text. For self-closing it
+        # ends with `/>`; for pair-form it ends with `>` (and an `</x>`
+        # follows).
+        slice_ = self._source[record.start_byte:end_byte]
+        return slice_.endswith(b">") and not slice_.endswith(b"/>")
 
     # ----- encoding -----
 
@@ -251,11 +282,12 @@ class _XmlToJson:
         text_segments_in_order: List[str] = []
         grouped: Dict[str, list] = {}
         child_cdata_state: Dict[str, bool] = {}
+        nocollapse_tags: List[str] = []  # tag-names with any pair-form empty child
         elem_tag_seq: List[str] = []
 
         for kind, payload in record.children:
             if kind == "elem":
-                tagname, val, child_is_cdata = payload
+                tagname, val, child_is_cdata, child_was_pair = payload
                 if tagname in child_cdata_state:
                     if child_cdata_state[tagname] != child_is_cdata:
                         raise CdataInconsistencyError(
@@ -264,6 +296,8 @@ class _XmlToJson:
                         )
                 else:
                     child_cdata_state[tagname] = child_is_cdata
+                if child_was_pair and tagname not in nocollapse_tags:
+                    nocollapse_tags.append(tagname)
                 grouped.setdefault(tagname, []).append(val)
                 order_entries.append(tagname)
                 elem_tag_seq.append(tagname)
@@ -306,6 +340,9 @@ class _XmlToJson:
         cdata_tags = [t for t, was_cdata in child_cdata_state.items() if was_cdata]
         if cdata_tags:
             result["_cdata"] = cdata_tags
+
+        if nocollapse_tags:
+            result["_nocollapse"] = nocollapse_tags
 
         needs_order = has_comment or (
             has_elem and not _is_grouped(elem_tag_seq)

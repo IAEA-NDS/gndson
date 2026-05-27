@@ -1,17 +1,17 @@
 """
 Canonical JSON dict -> XML, per spec.md.
 
-Iteration 2c — supports everything before, plus:
-  - _comments + _order: comments preserved at the right positions among siblings.
-  - _text as list of strings: text split by comments inside text-only elements.
+Iteration 2d — supports everything before, plus:
+  - _nocollapse: emit `<tag></tag>` (pair form) for empty children listed
+    here, rather than the default `<tag/>` (self-closing).
+  - _attrorder: emit attributes in the listed order, overriding JSON
+    insertion order. Must be a permutation of the element's attribute names.
 
 Earlier iterations:
+  - 2c: _comments + _order + _text-as-list
   - 2b: _cdata
   - 1:  elements/attrs/text, bare-string and object forms, scalar-vs-list,
         _text for text+attrs, _xml, root-tag unwrap, entity escaping.
-
-Not yet implemented:
-  - _nocollapse, _attrorder.
 """
 
 from typing import Any, Dict, FrozenSet, List, Tuple
@@ -70,17 +70,21 @@ def _emit_element(
     *,
     codec: EntityCodec,
     as_cdata: bool = False,
+    nocollapse: bool = False,
 ) -> str:
     """Emit a single XML element from its tag name and canonical-form value.
 
     ``as_cdata`` is supplied by the parent: if True, the element's text content
-    is emitted inside ``<![CDATA[...]]>`` rather than entity-escaped. When the
-    text is a list of segments (comment-split), every segment is CDATA-wrapped.
+    is emitted inside ``<![CDATA[...]]>`` rather than entity-escaped.
+
+    ``nocollapse`` is supplied by the parent: if True and the element would
+    otherwise emit as self-closing `<tag/>`, emit `<tag></tag>` instead.
+    Only takes effect when the element body is empty.
     """
     # Bare-string case: pure text content, no attrs, no children, no comments.
     if isinstance(value, str):
         if value == "":
-            return f"<{tag}/>"
+            return f"<{tag}></{tag}>" if nocollapse else f"<{tag}/>"
         body = _wrap_text(value, as_cdata=as_cdata, codec=codec)
         return f"<{tag}>{body}</{tag}>"
 
@@ -92,9 +96,7 @@ def _emit_element(
 
     parts = _split_object(value, tag=tag)
 
-    attr_str = "".join(
-        f' {name}="{codec.encode_attr(val)}"' for name, val in parts.attrs
-    )
+    attr_str = _format_attrs(tag, parts, codec=codec)
 
     # Empty element: no children, no text content, no comments,
     # and either no _order or an empty _order.
@@ -104,10 +106,32 @@ def _emit_element(
         and not parts.comments
         and not parts.order  # None or empty list both OK
     ):
+        if nocollapse:
+            return f"<{tag}{attr_str}></{tag}>"
         return f"<{tag}{attr_str}/>"
 
     body = _emit_body(tag, parts, as_cdata=as_cdata, codec=codec)
     return f"<{tag}{attr_str}>{body}</{tag}>"
+
+
+def _format_attrs(tag: str, parts: "_Parts", *, codec: EntityCodec) -> str:
+    """Render the attribute list, honoring `_attrorder` if present."""
+    if parts.attrorder is None:
+        ordered = parts.attrs
+    else:
+        # Must be a permutation of the element's attribute names.
+        have = {name for name, _ in parts.attrs}
+        listed = set(parts.attrorder)
+        if listed != have or len(parts.attrorder) != len(parts.attrs):
+            raise MalformedJsonError(
+                f"<{tag}>: _attrorder must be a permutation of the element's "
+                f"attribute names; have={sorted(have)}, listed={parts.attrorder}"
+            )
+        by_name = dict(parts.attrs)
+        ordered = [(name, by_name[name]) for name in parts.attrorder]
+    return "".join(
+        f' {name}="{codec.encode_attr(val)}"' for name, val in ordered
+    )
 
 
 def _emit_body(
@@ -126,8 +150,12 @@ def _emit_body(
             out.append(_wrap_text(parts.text, as_cdata=as_cdata, codec=codec))
         for child_tag, child_val in parts.children:
             child_as_cdata = child_tag in parts.cdata_tags
+            child_nocollapse = child_tag in parts.nocollapse_tags
             for v in _iter_child_values(child_val):
-                out.append(_emit_element(child_tag, v, codec=codec, as_cdata=child_as_cdata))
+                out.append(_emit_element(
+                    child_tag, v,
+                    codec=codec, as_cdata=child_as_cdata, nocollapse=child_nocollapse,
+                ))
         return "".join(out)
 
     # `_order` is present. Walk it, consuming from the per-source lists.
@@ -179,7 +207,11 @@ def _emit_body(
                     "than exist in the JSON"
                 )
             child_as_cdata = tag_name in parts.cdata_tags
-            out.append(_emit_element(tag_name, vals[idx], codec=codec, as_cdata=child_as_cdata))
+            child_nocollapse = tag_name in parts.nocollapse_tags
+            out.append(_emit_element(
+                tag_name, vals[idx],
+                codec=codec, as_cdata=child_as_cdata, nocollapse=child_nocollapse,
+            ))
             child_idx[tag_name] = idx + 1
 
     # Consumption validation: everything must have been used exactly once.
@@ -236,7 +268,10 @@ def _emit_comment(text: str) -> str:
 
 # Parsed object value — internal struct used by the emit functions.
 class _Parts:
-    __slots__ = ("attrs", "text", "children", "cdata_tags", "comments", "order")
+    __slots__ = (
+        "attrs", "text", "children", "cdata_tags", "comments", "order",
+        "nocollapse_tags", "attrorder",
+    )
 
     def __init__(self):
         self.attrs: List[Tuple[str, str]] = []
@@ -245,6 +280,8 @@ class _Parts:
         self.cdata_tags: FrozenSet[str] = frozenset()
         self.comments: List[str] = []
         self.order: List[str] = None  # None means "no _order key"
+        self.nocollapse_tags: FrozenSet[str] = frozenset()
+        self.attrorder: List[str] = None  # None means "JSON insertion order"
 
 
 def _split_object(value: Dict[str, Any], *, tag: str) -> "_Parts":
@@ -285,6 +322,18 @@ def _split_object(value: Dict[str, Any], *, tag: str) -> "_Parts":
                     f"<{tag}> _cdata must be a list of strings"
                 )
             parts.cdata_tags = frozenset(val)
+        elif key == "_nocollapse":
+            if not isinstance(val, list) or not all(isinstance(t, str) for t in val):
+                raise MalformedJsonError(
+                    f"<{tag}> _nocollapse must be a list of strings"
+                )
+            parts.nocollapse_tags = frozenset(val)
+        elif key == "_attrorder":
+            if not isinstance(val, list) or not all(isinstance(t, str) for t in val):
+                raise MalformedJsonError(
+                    f"<{tag}> _attrorder must be a list of strings"
+                )
+            parts.attrorder = val
         elif key in RESERVED_META:
             raise MalformedJsonError(
                 f"<{tag}>: meta key {key!r} not yet supported in this iteration"

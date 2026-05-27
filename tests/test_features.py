@@ -131,10 +131,6 @@ class TestSerializer:
         with pytest.raises(MalformedJsonError):
             to_xml_string({"a": {}, "b": {}})
 
-    def test_unsupported_meta_key_rejected(self):
-        # _nocollapse / _attrorder are not yet supported in this iteration.
-        with pytest.raises(MalformedJsonError):
-            to_xml_string({"r": {"_nocollapse": ["x"], "x": ""}})
 
 
 # ===== Synthetic round-trip cases (within iteration-1 scope) =====
@@ -340,6 +336,96 @@ class TestComments:
     ])
     def test_round_trip_comments(self, xml):
         _assert_round_trip(xml)
+
+
+# ===== _nocollapse + _attrorder (iteration 2d) =====
+
+class TestNocollapse:
+    def test_parse_self_closing_does_not_emit_nocollapse(self):
+        result = parse_xml_bytes(b'<r><x/></r>')
+        assert "_nocollapse" not in result["r"]
+
+    def test_parse_pair_form_empty_emits_nocollapse(self):
+        result = parse_xml_bytes(b'<r><x></x></r>')
+        assert result["r"].get("_nocollapse") == ["x"]
+
+    def test_parse_pair_form_empty_with_attrs(self):
+        result = parse_xml_bytes(b'<r><x a="1"></x></r>')
+        assert result["r"].get("_nocollapse") == ["x"]
+        assert result["r"]["x"] == {"@a": "1"}
+
+    def test_parse_mixed_self_close_and_pair_marks_nocollapse(self):
+        # Any pair-form occurrence makes the tag nocollapse (per-tag granularity).
+        result = parse_xml_bytes(b'<r><x/><x></x></r>')
+        assert result["r"].get("_nocollapse") == ["x"]
+
+    def test_parse_only_self_closing_no_nocollapse(self):
+        result = parse_xml_bytes(b'<r><x/><x/></r>')
+        assert "_nocollapse" not in result["r"]
+
+    def test_serialize_nocollapse_emits_pair_form(self):
+        data = {"r": {"_nocollapse": ["x"], "x": ""}}
+        xml = to_xml_string(data)
+        assert "<x></x>" in xml
+        assert "<x/>" not in xml
+
+    def test_serialize_nocollapse_with_attrs(self):
+        data = {"r": {"_nocollapse": ["x"], "x": {"@a": "1"}}}
+        xml = to_xml_string(data)
+        assert '<x a="1"></x>' in xml
+
+    def test_serialize_nocollapse_irrelevant_when_nonempty(self):
+        # nocollapse only affects empty elements; non-empty elements are
+        # always pair-form anyway.
+        data = {"r": {"_nocollapse": ["x"], "x": "hello"}}
+        xml = to_xml_string(data)
+        assert "<x>hello</x>" in xml
+
+    def test_serialize_malformed_nocollapse_rejected(self):
+        with pytest.raises(MalformedJsonError):
+            to_xml_string({"r": {"_nocollapse": "not-a-list"}})
+
+    def test_round_trip_pair_form_preserved_byte_exact(self):
+        # Stronger than the corpus comparator (which ignores the distinction).
+        # We compare the re-emitted XML byte-by-byte for this synthetic case.
+        original = b'<?xml version="1.0" encoding="UTF-8"?>\n<r><x></x><y a="1"></y></r>'
+        d = parse_xml_bytes(original)
+        re_xml = to_xml_string(d).encode("utf-8")
+        # Both <x></x> and <y a="1"></y> must reappear in pair form.
+        assert b"<x></x>" in re_xml
+        assert b'<y a="1"></y>' in re_xml
+
+
+class TestAttrorder:
+    def test_attrorder_overrides_insertion_order(self):
+        data = {"r": {"x": {"@b": "2", "@a": "1", "_attrorder": ["a", "b"]}}}
+        xml = to_xml_string(data)
+        # Output must use a-then-b order regardless of dict insertion order.
+        assert '<x a="1" b="2"/>' in xml
+
+    def test_attrorder_permutation_mismatch_rejected(self):
+        with pytest.raises(MalformedJsonError):
+            to_xml_string({
+                "r": {"x": {"@a": "1", "@b": "2", "_attrorder": ["a"]}}
+            })
+
+    def test_attrorder_unknown_name_rejected(self):
+        with pytest.raises(MalformedJsonError):
+            to_xml_string({
+                "r": {"x": {"@a": "1", "_attrorder": ["a", "ghost"]}}
+            })
+
+    def test_attrorder_malformed_rejected(self):
+        with pytest.raises(MalformedJsonError):
+            to_xml_string({"r": {"x": {"@a": "1", "_attrorder": "a"}}})
+
+    def test_attrorder_round_trip_via_user_authored_json(self):
+        # User hand-writes JSON with reversed attribute order + _attrorder.
+        # Output should serialize attributes in the listed order.
+        d = {"_xml": {"version": "1.0", "encoding": "UTF-8"},
+             "r": {"x": {"@b": "2", "@a": "1", "_attrorder": ["a", "b"]}}}
+        xml = to_xml_string(d).encode("utf-8")
+        assert b'<x a="1" b="2"/>' in xml
 
 
 def _assert_round_trip(xml: bytes) -> None:
