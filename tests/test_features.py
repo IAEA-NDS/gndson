@@ -4,7 +4,8 @@ import pytest
 
 from gndson import (
     parse_xml_bytes, to_xml_string,
-    MixedContentError, NameCollisionError, MalformedJsonError, UnsupportedXmlError,
+    MixedContentError, NameCollisionError, MalformedJsonError,
+    UnsupportedXmlError, CdataInconsistencyError,
 )
 
 
@@ -130,8 +131,8 @@ class TestSerializer:
         with pytest.raises(MalformedJsonError):
             to_xml_string({"a": {}, "b": {}})
 
-    def test_meta_key_in_element_rejected_until_supported(self):
-        # _order etc. not yet supported in this iteration.
+    def test_unsupported_meta_key_rejected(self):
+        # _order etc. not yet supported in this iteration; _cdata IS supported.
         with pytest.raises(MalformedJsonError):
             to_xml_string({"r": {"_order": ["x"], "x": ""}})
 
@@ -161,3 +162,82 @@ class TestRoundTrip:
         assert d1 == d2
         assert d1["r"]["x"]["@a"] == 'quote "'
         assert d1["r"]["x"]["_text"] == "a & b < c"
+
+
+# ===== CDATA (iteration 2) =====
+
+class TestCdata:
+    def test_parse_cdata_text_only_element(self):
+        result = parse_xml_bytes(
+            b'<r><title><![CDATA[Hello <world>]]></title></r>'
+        )
+        assert result["r"] == {
+            "_cdata": ["title"],
+            "title": "Hello <world>",
+        }
+
+    def test_parse_cdata_with_attrs(self):
+        result = parse_xml_bytes(
+            b'<r><x a="1"><![CDATA[body]]></x></r>'
+        )
+        assert result["r"] == {
+            "_cdata": ["x"],
+            "x": {"@a": "1", "_text": "body"},
+        }
+
+    def test_parse_two_cdata_siblings_same_tag(self):
+        result = parse_xml_bytes(
+            b'<r><x><![CDATA[a]]></x><x><![CDATA[b]]></x></r>'
+        )
+        assert result["r"] == {
+            "_cdata": ["x"],
+            "x": ["a", "b"],
+        }
+
+    def test_parse_mixed_cdata_plain_within_element_rejected(self):
+        with pytest.raises(CdataInconsistencyError):
+            parse_xml_bytes(b'<r><x>plain<![CDATA[cdata]]></x></r>')
+
+    def test_parse_inconsistent_cdata_across_siblings_rejected(self):
+        with pytest.raises(CdataInconsistencyError):
+            parse_xml_bytes(
+                b'<r><x><![CDATA[a]]></x><x>plain</x></r>'
+            )
+
+    def test_serialize_cdata(self):
+        data = {"r": {"_cdata": ["title"], "title": "Hello <world>"}}
+        xml = to_xml_string(data)
+        assert "<title><![CDATA[Hello <world>]]></title>" in xml
+
+    def test_serialize_cdata_with_attrs(self):
+        data = {"r": {"_cdata": ["x"], "x": {"@a": "1", "_text": "body"}}}
+        xml = to_xml_string(data)
+        assert '<x a="1"><![CDATA[body]]></x>' in xml
+
+    def test_serialize_cdata_forbidden_sequence_rejected(self):
+        data = {"r": {"_cdata": ["x"], "x": "contains ]]> sequence"}}
+        with pytest.raises(MalformedJsonError):
+            to_xml_string(data)
+
+    def test_serialize_malformed_cdata_key_rejected(self):
+        with pytest.raises(MalformedJsonError):
+            to_xml_string({"r": {"_cdata": "not-a-list", "x": ""}})
+
+    @pytest.mark.parametrize("xml", [
+        b'<?xml version="1.0" encoding="UTF-8"?>\n<r><title><![CDATA[Hello <world>]]></title></r>',
+        b'<?xml version="1.0" encoding="UTF-8"?>\n<r><body><![CDATA[multi\nline\ntext]]></body></r>',
+        b'<?xml version="1.0" encoding="UTF-8"?>\n<r><x a="1"><![CDATA[body]]></x></r>',
+        b'<?xml version="1.0" encoding="UTF-8"?>\n<r><x><![CDATA[a]]></x><x><![CDATA[b]]></x><y>plain</y></r>',
+    ])
+    def test_round_trip_cdata(self, xml):
+        # Strict XML-equivalence round trip via the faithful tree comparator.
+        import sys
+        from pathlib import Path
+        sys.path.insert(0, str(Path(__file__).parent))
+        from xml_compare import parse_faithful, diff_summary
+        faithful_a = parse_faithful(xml)
+        d = parse_xml_bytes(xml)
+        re_xml = to_xml_string(d).encode("utf-8")
+        faithful_b = parse_faithful(re_xml)
+        diff = diff_summary(faithful_a, faithful_b)
+        assert not diff, diff

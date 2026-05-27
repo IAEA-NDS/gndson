@@ -1,7 +1,10 @@
 """
 XML -> canonical JSON dict, per spec.md.
 
-Iteration 1 (walking skeleton) — supports:
+Iteration 2 — supports everything in iteration 1, plus:
+  - _cdata: CDATA section detection on read; per-tag granularity per parent.
+
+Iteration 1 baseline:
   - Elements, attributes, text content (incl. attribute order)
   - Top-level root-tag wrapping (spec §3)
   - Bare-string shortcut for text-only-no-attr-no-children elements (§1)
@@ -11,7 +14,6 @@ Iteration 1 (walking skeleton) — supports:
   - _xml declaration metadata (§3)
 
 Not yet implemented (planned for later iterations):
-  - _cdata (CDATA section detection on read)
   - _comments / _order (comment preservation)
   - _nocollapse (explicit <x></x> vs <x/> distinction)
   - _text as list (text split by comments)
@@ -26,6 +28,7 @@ from .errors import (
     UnsupportedXmlError,
     NameCollisionError,
     MixedContentError,
+    CdataInconsistencyError,
 )
 
 
@@ -46,26 +49,35 @@ def parse_xml_bytes(data: bytes) -> Dict[str, Any]:
 class _ElementRecord:
     """Mutable state held on the stack during parsing of a single element."""
 
-    __slots__ = ("tag", "attrs", "children", "pending_text")
+    __slots__ = ("tag", "attrs", "children", "pending_text", "pending_is_cdata")
 
     def __init__(self, tag: str, attrs: Dict[str, str]) -> None:
         self.tag = tag
         self.attrs = attrs
         # Children list of (kind, payload):
-        #   ("text", str)
-        #   ("elem", (tagname, encoded_value))
-        # Later iterations add: ("comment", str), ("cdata_text", str).
+        #   ("text", str)                            — plain-text run
+        #   ("cdata_text", str)                      — CDATA-section text run
+        #   ("elem", (tagname, encoded_value, child_is_cdata))
+        # Later iterations add: ("comment", str).
         self.children: List[Tuple[str, Any]] = []
         self.pending_text = ""
+        self.pending_is_cdata = False
 
     def flush_text(self) -> None:
         if self.pending_text:
-            self.children.append(("text", self.pending_text))
+            kind = "cdata_text" if self.pending_is_cdata else "text"
+            self.children.append((kind, self.pending_text))
             self.pending_text = ""
 
-    def add_elem(self, tagname: str, value: Any) -> None:
+    def set_cdata_state(self, in_cdata: bool) -> None:
+        """Toggle the CDATA flag, flushing the pending run if its state changes."""
+        if self.pending_is_cdata != in_cdata:
+            self.flush_text()
+            self.pending_is_cdata = in_cdata
+
+    def add_elem(self, tagname: str, value: Any, child_is_cdata: bool) -> None:
         self.flush_text()
-        self.children.append(("elem", (tagname, value)))
+        self.children.append(("elem", (tagname, value, child_is_cdata)))
 
 
 class _XmlToJson:
@@ -87,6 +99,8 @@ class _XmlToJson:
         p.StartElementHandler = self._on_start
         p.EndElementHandler = self._on_end
         p.CharacterDataHandler = self._on_chars
+        p.StartCdataSectionHandler = self._on_start_cdata
+        p.EndCdataSectionHandler = self._on_end_cdata
         p.XmlDeclHandler = self._on_xml_decl
         p.ProcessingInstructionHandler = self._on_pi
         p.StartDoctypeDeclHandler = self._on_doctype
@@ -146,15 +160,23 @@ class _XmlToJson:
         if self.stack:
             self.stack[-1].pending_text += data
 
+    def _on_start_cdata(self) -> None:
+        if self.stack:
+            self.stack[-1].set_cdata_state(True)
+
+    def _on_end_cdata(self) -> None:
+        if self.stack:
+            self.stack[-1].set_cdata_state(False)
+
     def _on_end(self, _name: str) -> None:
         record = self.stack.pop()
         record.flush_text()
-        encoded = self._encode(record)
+        encoded, is_cdata = self._encode(record)
         if not self.stack:
             self.root_tag = record.tag
             self.root_encoded = encoded
         else:
-            self.stack[-1].add_elem(record.tag, encoded)
+            self.stack[-1].add_elem(record.tag, encoded, is_cdata)
 
     # ----- encoding -----
 
@@ -170,26 +192,47 @@ class _XmlToJson:
                 f"{kind.capitalize()} name {name!r} collides with reserved meta key"
             )
 
-    def _encode(self, record: _ElementRecord) -> Any:
-        """Apply spec §1 encoding rules to a finalized element record."""
-        elem_children = [payload for kind, payload in record.children if kind == "elem"]
-        text_segments = [payload for kind, payload in record.children if kind == "text"]
+    def _encode(self, record: _ElementRecord) -> Tuple[Any, bool]:
+        """Apply spec §1 encoding rules to a finalized element record.
+
+        Returns ``(encoded_value, self_is_cdata)``.  ``self_is_cdata`` is
+        True iff the element's text content came entirely from CDATA
+        sections; the caller (the parent) uses it to populate ``_cdata``.
+        """
+        elem_children = [
+            payload for kind, payload in record.children if kind == "elem"
+        ]
+        plain_segments = [
+            payload for kind, payload in record.children if kind == "text"
+        ]
+        cdata_segments = [
+            payload for kind, payload in record.children if kind == "cdata_text"
+        ]
 
         # Mixed-content check: element + non-whitespace text is forbidden by GNDS
-        # and out of scope for this translator. Inter-element whitespace is dropped.
+        # and out of scope. Inter-element whitespace is silently dropped.
         if elem_children:
-            for seg in text_segments:
+            for seg in plain_segments:
                 if seg.strip():
                     raise MixedContentError(
                         f"Element <{record.tag}> contains both text content and "
                         "element children (mixed content is out of scope)"
                     )
-            text_segments = []  # all whitespace; discard
+            if cdata_segments:
+                raise MixedContentError(
+                    f"Element <{record.tag}> contains both CDATA text and element "
+                    "children (mixed content is out of scope)"
+                )
+            plain_segments = []
 
-        # Bare-string shortcut: no attrs, no element children (and no comments,
-        # which aren't preserved yet in this iteration).
+        # Determine THIS element's text content and its CDATA-ness.
+        text_combined, self_is_cdata = self._classify_text(
+            record.tag, plain_segments, cdata_segments
+        )
+
+        # Bare-string shortcut: no attrs, no element children, no comments.
         if not record.attrs and not elem_children:
-            return "".join(text_segments)
+            return text_combined, self_is_cdata
 
         # Object form.
         result: Dict[str, Any] = {}
@@ -197,17 +240,50 @@ class _XmlToJson:
             result[ATTR_PREFIX + aname] = aval
 
         # Group child elements by tag, preserving first-occurrence order.
+        # Verify per-tag CDATA consistency along the way.
         grouped: Dict[str, list] = {}
-        for tagname, val in elem_children:
+        child_cdata_state: Dict[str, bool] = {}
+        for tagname, val, child_is_cdata in elem_children:
+            if tagname in child_cdata_state:
+                if child_cdata_state[tagname] != child_is_cdata:
+                    raise CdataInconsistencyError(
+                        f"<{record.tag}>: child <{tagname}> has inconsistent "
+                        "CDATA-ness across occurrences (some CDATA, some plain)"
+                    )
+            else:
+                child_cdata_state[tagname] = child_is_cdata
             grouped.setdefault(tagname, []).append(val)
         for tagname, vals in grouped.items():
             result[tagname] = vals[0] if len(vals) == 1 else vals
 
-        # Text alongside attributes (text+attrs case, spec §2 _text). Per the
-        # corpus this is empty in current GNDS, but we support it (option B1).
-        if record.attrs and not elem_children:
-            combined = "".join(text_segments)
-            if combined:
-                result["_text"] = combined
+        # Text alongside attributes (text+attrs case, spec §2 _text).
+        if record.attrs and not elem_children and text_combined:
+            result["_text"] = text_combined
 
-        return result
+        # _cdata: list of child tag names whose text was CDATA-encoded.
+        cdata_tags = [t for t, was_cdata in child_cdata_state.items() if was_cdata]
+        if cdata_tags:
+            result["_cdata"] = cdata_tags
+
+        return result, self_is_cdata
+
+    @staticmethod
+    def _classify_text(
+        tag: str, plain_segments: List[str], cdata_segments: List[str]
+    ) -> Tuple[str, bool]:
+        """Combine text segments and decide whether the element's text is CDATA.
+
+        - All-plain (or no text):       (combined, False)
+        - All-CDATA (no plain segments): (combined, True)
+        - Mixed (any plain AND any CDATA): error
+        """
+        has_plain = any(s for s in plain_segments)
+        has_cdata = any(s for s in cdata_segments)
+        if has_plain and has_cdata:
+            raise CdataInconsistencyError(
+                f"<{tag}>: text content mixes CDATA and plain text runs; "
+                "this is not supported (would require segment-level CDATA tracking)"
+            )
+        if has_cdata:
+            return "".join(cdata_segments), True
+        return "".join(plain_segments), False
