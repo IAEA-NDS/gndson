@@ -35,8 +35,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import pytest
 
 import gndson
-
-from xml_compare import parse_faithful, diff_summary
+from gndson._compare import parse_faithful, diff_summary
 
 
 # ----- core driver -----

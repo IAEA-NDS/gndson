@@ -430,10 +430,7 @@ class TestAttrorder:
 
 def _assert_round_trip(xml: bytes) -> None:
     """Strict XML-equivalence round-trip via the faithful tree comparator."""
-    import sys
-    from pathlib import Path
-    sys.path.insert(0, str(Path(__file__).parent))
-    from xml_compare import parse_faithful, diff_summary
+    from gndson._compare import parse_faithful, diff_summary
     faithful_a = parse_faithful(xml)
     d = parse_xml_bytes(xml)
     re_xml = to_xml_string(d).encode("utf-8")
