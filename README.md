@@ -141,8 +141,15 @@ The corpus driver reports two pass rates: spec-equivalence and byte-form-strict
 `examples/build_minimal_from_json.py` hand-authors a one-reaction GNDS file
 (n + H-1 elastic, MT=2) as a Python dict, translates it to XML with `gndson`,
 and (if FUDGE is importable) reads the result back to confirm the cross section
-value. Run with any Python that has FUDGE installed, or with `--skip-fudge` to
-generate the XML without the verification step.
+value.
+
+`examples/edit_via_json.py` shows the "edit nuclear data as JSON" workflow:
+loads a corpus GNDS file, scales a cross section in JSON-land via ordinary dict
+indexing, writes the modified XML, and uses FUDGE to confirm the change is
+visible (`σ(1 MeV) = 4.25 b` → `8.49 b` after `--factor 2.0`).
+
+Both scripts skip the FUDGE step gracefully when FUDGE isn't importable; pass
+`--skip-fudge` to skip it explicitly.
 
 ## Specification
 
