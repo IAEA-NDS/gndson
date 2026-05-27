@@ -1,19 +1,24 @@
 """
 Strict XML-equivalence comparator for round-trip testing.
 
-Parses an XML document into a faithful in-memory tree that preserves:
-  - Element tag names and attributes (attribute order ignored)
-  - Child element order
-  - XML comments (text and position among siblings)
-  - Text content byte-exact (newlines, indentation, leading/trailing ws)
-  - CDATA-ness of text content
+Two comparison levels are available, both implemented as parses into a
+faithful in-memory tree compared with ``==``:
 
-Two trees compare equal iff their XMLs are equivalent per spec §9.
-Differences in inter-tag whitespace, self-closing-vs-pair form, attribute
-order, attribute quote character, and minimal entity escaping are ignored.
+  - **Spec-equivalence** (``strict_form=False``, default). Preserves tag
+    names, attributes (order-ignored), child order, comments, text
+    byte-exact, and CDATA-ness. Per spec §9, ignores: inter-tag
+    whitespace, self-closing-vs-pair form, attribute order, attribute
+    quote character, minimal entity escaping.
 
-This is the honest yardstick for the round-trip property: a lossy parser
-cannot game it by being equally lossy on both sides.
+  - **Byte-form-strict** (``strict_form=True``). All of the above PLUS
+    the self-closing-vs-pair distinction. This is the level at which
+    ``_nocollapse`` is verified to round-trip correctly. Attribute order
+    is still ignored (use ``_attrorder`` to enforce it on the JSON side).
+
+The strict mode is a superset: every pair that passes strict also passes
+spec-equivalence. The two levels are reported separately so the corpus
+driver can distinguish "spec round-trip broken" from "spec round-trip
+fine but byte-form fidelity lost".
 """
 
 from __future__ import annotations
@@ -29,6 +34,11 @@ class Element:
     # Plain dict; equality ignores key order (Python semantics).
     attrs: Dict[str, str] = field(default_factory=dict)
     children: List["Node"] = field(default_factory=list)
+    # Self-closing form indicator. Only set meaningfully when strict_form=True
+    # is passed to parse_faithful AND the element is empty (no body content).
+    # In non-strict mode it is left at the constant default so equality is
+    # unaffected by the source-syntax difference.
+    self_closing: bool = False
 
 
 @dataclass
@@ -45,8 +55,14 @@ class Text:
 Node = Union[Element, Comment, Text]
 
 
-def parse_faithful(data: bytes) -> Element:
-    """Parse XML bytes into a faithful tree, post-processed to drop inter-tag whitespace."""
+def parse_faithful(data: bytes, *, strict_form: bool = False) -> Element:
+    """Parse XML bytes into a faithful tree, post-processed to drop inter-tag whitespace.
+
+    When ``strict_form=True``, each empty element's ``self_closing`` field is
+    populated from the source bytes (True for ``<x/>``, False for ``<x></x>``);
+    in the default mode the field is left at its constant default so that the
+    two source forms compare equal.
+    """
     p = expat.ParserCreate()
     p.ordered_attributes = True
     p.buffer_text = True
@@ -54,10 +70,13 @@ def parse_faithful(data: bytes) -> Element:
     stack: List[Element] = []
     root_container: List[Element] = []  # 1-list trick to allow inner assignment
     in_cdata = [False]
+    elem_start_byte: Dict[int, int] = {}  # id(elem) -> start byte
 
     def on_start(name, attrs_list):
         attrs = {attrs_list[i]: attrs_list[i + 1] for i in range(0, len(attrs_list), 2)}
         elem = Element(tag=name, attrs=attrs)
+        if strict_form:
+            elem_start_byte[id(elem)] = p.CurrentByteIndex
         if stack:
             stack[-1].children.append(elem)
         else:
@@ -65,6 +84,13 @@ def parse_faithful(data: bytes) -> Element:
         stack.append(elem)
 
     def on_end(_name):
+        elem = stack[-1]
+        if strict_form and not elem.children:
+            start = elem_start_byte.pop(id(elem), None)
+            if start is not None:
+                end = p.CurrentByteIndex
+                slice_ = data[start:end]
+                elem.self_closing = slice_.endswith(b"/>")
         stack.pop()
 
     def on_chars(text):
@@ -154,6 +180,10 @@ def diff_summary(a: Element, b: Element, path: str = "/") -> str:
         return (f"{path}<{a.tag}>: attrs differ "
                 f"(only_a={sorted(only_a)}, only_b={sorted(only_b)}, "
                 f"vals={diff_vals})")
+    if a.self_closing != b.self_closing:
+        form_a = "self-closing <{}/>".format(a.tag) if a.self_closing else f"pair-form <{a.tag}></{a.tag}>"
+        form_b = "self-closing <{}/>".format(b.tag) if b.self_closing else f"pair-form <{b.tag}></{b.tag}>"
+        return f"{path}<{a.tag}>: form differs ({form_a} vs {form_b})"
     if len(a.children) != len(b.children):
         return (f"{path}<{a.tag}>: child count differs "
                 f"({len(a.children)} vs {len(b.children)})")

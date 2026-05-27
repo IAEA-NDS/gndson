@@ -2,16 +2,20 @@
 Corpus round-trip test driver.
 
 Walks a user-supplied directory of GNDS XML files. For each file:
-  1. parse the ORIGINAL XML into a faithful (lossless) tree (xml_compare)
+  1. parse the ORIGINAL XML into faithful trees (lossless, two flavours)
   2. translate ORIGINAL XML -> JSON via gndson.parse
   3. untranslate JSON -> re-XML via gndson.to_xml_string
-  4. parse the RE-XML into a faithful tree
-  5. assert the two faithful trees are equal per spec §9 (XML-equivalent)
+  4. parse the RE-XML into faithful trees (the same two flavours)
+  5. compare each pair, at two levels:
+       - spec-equivalence (§9): ignores self-closing-vs-pair, attribute order,
+         attribute quote, inter-tag whitespace, minimal entity escaping.
+       - byte-form-strict: as above, but the self-closing-vs-pair distinction
+         IS preserved (verifies that _nocollapse round-trips correctly).
 
-This is a STRICT round-trip check: equality on faithful trees fails if
-any spec-relevant information was lost in the JSON form. Inter-tag
-whitespace, self-closing-vs-pair, attribute order, attribute quote, and
-minimal entity escaping are ignored — everything else must match.
+Per spec §9 the round-trip property is the spec-equivalence one. The
+byte-form-strict number is a stricter additional metric: every byte-form
+pass count <= the corresponding spec-equivalence count. If they differ,
+_nocollapse coverage is the suspect.
 
 Usage (pytest):
     pytest --gnds-corpus /path/to/corpus
@@ -48,52 +52,74 @@ def list_corpus_files(corpus_root: Path):
 
 
 def round_trip_one(path: Path):
-    """Run the strict round-trip on one file. Returns (ok: bool, reason: str)."""
+    """Run the round-trip on one file at two checking levels.
+
+    Returns ``(spec_ok, strict_ok, reason)``:
+      - ``spec_ok``: True iff the round-trip is XML-equivalent per spec §9.
+      - ``strict_ok``: True iff additionally the self-closing-vs-pair form
+        was preserved (which is what ``_nocollapse`` is for).
+      - ``reason``: empty if both pass; otherwise the first failure's reason.
+
+    ``strict_ok`` is meaningful only when ``spec_ok`` is True; if spec-equivalence
+    fails, strict_ok is reported as False too.
+    """
     try:
         original_bytes = path.read_bytes()
     except Exception as e:
-        return False, f"read: {type(e).__name__}: {e}"
-    try:
-        faithful_original = parse_faithful(original_bytes)
-    except Exception as e:
-        return False, f"faithful-parse: {type(e).__name__}: {e}"
+        return False, False, f"read: {type(e).__name__}: {e}"
     try:
         json_1 = gndson.parse_xml_bytes(original_bytes)
     except gndson.GndsonError as e:
-        return False, f"translate: {type(e).__name__}: {e}"
+        return False, False, f"translate: {type(e).__name__}: {e}"
     except Exception as e:
-        return False, f"translate-unexpected: {type(e).__name__}: {e}"
+        return False, False, f"translate-unexpected: {type(e).__name__}: {e}"
     try:
         xml_text = gndson.to_xml_string(json_1)
     except gndson.GndsonError as e:
-        return False, f"untranslate: {type(e).__name__}: {e}"
+        return False, False, f"untranslate: {type(e).__name__}: {e}"
     except Exception as e:
-        return False, f"untranslate-unexpected: {type(e).__name__}: {e}"
+        return False, False, f"untranslate-unexpected: {type(e).__name__}: {e}"
+    re_bytes = xml_text.encode("utf-8")
+
+    # Level 1: spec-equivalence.
     try:
-        faithful_reemit = parse_faithful(xml_text.encode("utf-8"))
+        spec_a = parse_faithful(original_bytes)
+        spec_b = parse_faithful(re_bytes)
     except Exception as e:
-        return False, f"reemit-parse: {type(e).__name__}: {e}"
-    if faithful_original != faithful_reemit:
-        diff = diff_summary(faithful_original, faithful_reemit)
-        return False, f"xml-diff: {diff}"
-    return True, ""
+        return False, False, f"faithful-parse: {type(e).__name__}: {e}"
+    if spec_a != spec_b:
+        return False, False, "spec-diff: " + diff_summary(spec_a, spec_b)
+
+    # Level 2: byte-form-strict (only run if spec-equivalence passed).
+    strict_a = parse_faithful(original_bytes, strict_form=True)
+    strict_b = parse_faithful(re_bytes, strict_form=True)
+    if strict_a != strict_b:
+        return True, False, "form-diff: " + diff_summary(strict_a, strict_b)
+
+    return True, True, ""
 
 
 def summarise(files):
-    ok_count = 0
-    failures = []
+    spec_ok_count = 0
+    strict_ok_count = 0
+    failures = []  # list of (name, reason). Either-level failure recorded once.
     for f in files:
-        ok, reason = round_trip_one(f)
-        if ok:
-            ok_count += 1
-        else:
+        spec_ok, strict_ok, reason = round_trip_one(f)
+        if spec_ok:
+            spec_ok_count += 1
+        if strict_ok:
+            strict_ok_count += 1
+        if not (spec_ok and strict_ok):
             failures.append((f.name, reason))
-    return ok_count, failures
+    return spec_ok_count, strict_ok_count, failures
 
 
-def print_summary(ok_count, failures, total, stream=sys.stdout):
-    pct = ok_count * 100 / total if total else 0.0
-    print(f"\nRound-trip pass rate: {ok_count}/{total} ({pct:.1f}%)", file=stream)
+def print_summary(spec_ok, strict_ok, failures, total, stream=sys.stdout):
+    spec_pct = spec_ok * 100 / total if total else 0.0
+    strict_pct = strict_ok * 100 / total if total else 0.0
+    print(file=stream)
+    print(f"Spec-equivalence round-trip (§9): {spec_ok}/{total} ({spec_pct:.1f}%)", file=stream)
+    print(f"Byte-form-strict round-trip:      {strict_ok}/{total} ({strict_pct:.1f}%)", file=stream)
     if failures:
         buckets = Counter(r.split(":")[0] for _, r in failures)
         print("Failure breakdown:", file=stream)
@@ -123,8 +149,8 @@ def test_corpus_round_trip(request):
     files = list_corpus_files(corpus_root)
     if not files:
         pytest.skip(f"no .xml files found under {corpus_root}")
-    ok_count, failures = summarise(files)
-    print_summary(ok_count, failures, len(files))
+    spec_ok, strict_ok, failures = summarise(files)
+    print_summary(spec_ok, strict_ok, failures, len(files))
 
 
 # ----- script entry -----
@@ -155,12 +181,12 @@ def main():
         print(f"No .xml files found under {args.corpus}", file=sys.stderr)
         sys.exit(2)
 
-    ok_count, failures = summarise(files)
+    spec_ok, strict_ok, failures = summarise(files)
     for name, reason in failures[: args.list_failures]:
         print(f"FAIL {name}: {reason}")
     if len(failures) > args.list_failures:
         print(f"... and {len(failures) - args.list_failures} more failures")
-    print_summary(ok_count, failures, len(files))
+    print_summary(spec_ok, strict_ok, failures, len(files))
 
 
 if __name__ == "__main__":
