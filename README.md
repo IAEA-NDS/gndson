@@ -136,6 +136,14 @@ attributes — is faithfully preserved.
 The corpus driver reports two pass rates: spec-equivalence and byte-form-strict
 (see "Round-trip contract" above).
 
+## Examples
+
+`examples/build_minimal_from_json.py` hand-authors a one-reaction GNDS file
+(n + H-1 elastic, MT=2) as a Python dict, translates it to XML with `gndson`,
+and (if FUDGE is importable) reads the result back to confirm the cross section
+value. Run with any Python that has FUDGE installed, or with `--skip-fudge` to
+generate the XML without the verification step.
+
 ## Specification
 
 See `spec.md` for the canonical-form definition, the round-trip contract, and the
