@@ -1,4 +1,4 @@
-# GNDS XML ↔ JSON Translation Spec — Draft v0.4
+# GNDS XML ↔ JSON Translation Spec — Draft v0.5
 
 ## Scope
 
@@ -53,9 +53,14 @@ There is no `_arrays` key. Array-vs-scalar status of child tags is count-driven 
 
 ## 3. Document root
 
-The root JSON object is the encoding of the root XML element with one additional optional key:
+The top-level JSON object wraps the root XML element under its tag name, plus an optional XML declaration:
 
-- `"_xml": {"version": "1.0", "encoding": "UTF-8"}` — XML declaration metadata. If absent on write, defaults are used.
+- `"<root-tag>": <encoding>` — **required.** The root element's encoding (always object form, since the root has children or attributes in any real GNDS file). The key is the XML root element's tag name (e.g. `"reactionSuite"`, `"covarianceSuite"`).
+- `"_xml": {"version": "1.0", "encoding": "UTF-8"}` — optional. XML declaration metadata. If absent on write, defaults are used.
+
+The top-level object must contain exactly one non-meta key (the root tag). Multiple non-meta keys, or zero, is a fatal error.
+
+This wrapping is the one structural rhyme that elevates the root element to the same form as every other element: each element is encoded as `{<tagname>: <encoding>}` under its parent — and at the top level, the document plays the role of the parent.
 
 ## 4. Reserved name prefixes
 
@@ -135,6 +140,7 @@ The translator errors loudly (never silently transforms data) when it encounters
 - A custom DTD entity (§8).
 - A meta key with malformed shape — e.g. `_cdata` not a list of strings, `_order` referencing children that do not exist, `_order` `_comment`-count not matching `_comments` length, `_order` `_text`-count not matching `_text` list length, `_attrorder` not a permutation of the element's attribute names.
 - `_text` present as a list when `_order` does not interleave `_text` markers correctly, or as a string when comments split the text content.
+- A top-level JSON object with zero or more than one non-meta key (§3 requires exactly one — the root tag).
 
 ---
 
@@ -166,20 +172,22 @@ JSON (canonical):
 ```json
 {
   "_xml": {"version": "1.0", "encoding": "UTF-8"},
-  "@projectile": "n",
-  "@target": "H1",
-  "reactions": {
-    "_order": ["_comment", "reaction"],
-    "_comments": ["elastic"],
-    "reaction": {
-      "@label": "n + H1",
-      "@ENDF_MT": "2",
-      "crossSection": {
-        "function1ds": {
-          "XYs1d": [
-            {"@index": "0", "values": "1.0 2.0 3.0"},
-            {"@index": "1", "values": "4.0 5.0 6.0"}
-          ]
+  "reactionSuite": {
+    "@projectile": "n",
+    "@target": "H1",
+    "reactions": {
+      "_order": ["_comment", "reaction"],
+      "_comments": ["elastic"],
+      "reaction": {
+        "@label": "n + H1",
+        "@ENDF_MT": "2",
+        "crossSection": {
+          "function1ds": {
+            "XYs1d": [
+              {"@index": "0", "values": "1.0 2.0 3.0"},
+              {"@index": "1", "values": "4.0 5.0 6.0"}
+            ]
+          }
         }
       }
     }
@@ -189,6 +197,7 @@ JSON (canonical):
 
 Notes:
 
+- The root element `<reactionSuite>` is wrapped under a top-level `"reactionSuite"` key — see §3.
 - `<values>1.0 2.0 3.0</values>` is text-only-no-attr-no-comment → bare string.
 - `<XYs1d>` repeats → JSON list.
 - `<reactions>` requires `_order` only because a comment interleaves with `reaction`; otherwise it would be omitted.
@@ -232,6 +241,8 @@ Notes:
 ---
 
 ## Changelog
+
+**v0.5** — fixed an oversight in §3: the top-level JSON object now wraps the root element under its tag name rather than collapsing the root encoding into the document object. Without the wrap, the root element's tag name was nowhere in the JSON and could not be recovered on writeback. Example 1 updated. §10 gains a new error case (top-level must contain exactly one non-meta key).
 
 **v0.4** — clarified that colons in element/attribute names are accepted as literal characters (the `xpath:href` form in GNDS PDF §13.2), not parsed as namespace prefixes. Added a one-line case-sensitivity callout (Scope). Added a Semantic-vs-Textual equivalence note in §9 stating that default-valued-attribute normalization is intentionally NOT performed. Reframed Example 2 from "the `<data>` case" to the general "comment splitting text content" pattern, with a note that `<data>` in `sep="td"|"tr"|"tc"` modes uses ordinary element children covered by §1. Noted that GNDS itself bans mixed text + element-children content (not just the translator).
 
