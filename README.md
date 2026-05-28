@@ -68,21 +68,39 @@ cat file.xml | gndson xml-to-json | gndson json-to-xml > round.xml
 
 ### Schema-aware ergonomic output
 
-`xml-to-json` and `json-to-xml` accept `--pipeline NAME` to apply one of the
-named schema-layer pipelines (see `framework.md`). On `xml-to-json` the
-pipeline's forward direction runs after parsing; on `json-to-xml` the inverse
-runs before serialising. Available names: `canonical`, `arity`, `uniform`,
-`wrappers`, `heterogeneous`, `ergonomic`, `ergonomic_full`.
+`xml-to-json`, `json-to-xml`, and `verify` accept `--pipeline NAME` to apply
+one of the named schema-layer pipelines (see `framework.md`). On `xml-to-json`
+the pipeline's forward direction runs after parsing; on `json-to-xml` the
+inverse runs before serialising; on `verify` the schema-layer round-trip is
+checked alongside the XML-layer one.
+
+Available pipelines, smallest to fullest:
+
+| Pipeline               | What it does                                                                   |
+|------------------------|--------------------------------------------------------------------------------|
+| `canonical`            | identity — no schema transformation                                            |
+| `arity`                | always-list discipline for plural containers (`reactions/reaction`, ...)       |
+| `uniform`              | `arity` + collapse `{Xs: {X: [...]}}` to `{Xs: [...]}` for uniform-inner       |
+| `wrappers`             | annotate physicalQuantity wrappers with `_kind` and collapse them              |
+| `heterogeneous`        | collapse heterogeneous containers (`function1ds`, `styles`, `axes`, ...) to a flat list with `_kind` per item |
+| `split_text`           | split `<values>` text into a JSON list of tokens                               |
+| `data_columns`         | parse FUDGE-style `<data>` header comments into `_columns` + `_rows`           |
+| `ergonomic`            | `arity` + `uniform` + `wrappers` — the recommended default                     |
+| `ergonomic_full`       | `ergonomic` + `heterogeneous`                                                  |
+| `ergonomic_split`      | `ergonomic_full` + `split_text`                                                |
+| `ergonomic_split_data` | `ergonomic_split` + `data_columns` — the fullest ergonomic form                |
+
+All pipelines round-trip 145/145 on the bundled GNDS corpus (the
+`split_text`-containing pipelines round-trip at the GNDS-spec level —
+internal whitespace inside `<values>` bodies is normalised on the inverse).
 
 ```bash
-gndson xml-to-json file.xml --pipeline ergonomic        # collapse wrappers,
-                                                        # always-list plurals,
-                                                        # drop redundant inner tags
-gndson xml-to-json file.xml --pipeline ergonomic_full   # also collapse
-                                                        # heterogeneous containers
-gndson json-to-xml file.json --pipeline ergonomic       # inverse: take a JSON
-                                                        # produced by the same
-                                                        # pipeline back to XML
+gndson xml-to-json file.xml --pipeline ergonomic              # the recommended default
+gndson xml-to-json file.xml --pipeline ergonomic_split_data   # fullest ergonomic form
+gndson json-to-xml file.json --pipeline ergonomic_split_data  # inverse: take a JSON
+                                                              # produced by the same
+                                                              # pipeline back to XML
+gndson verify file.xml --pipeline ergonomic_full --strict     # all three checks
 ```
 
 `python -m gndson <command> ...` works identically if you prefer not to install.
