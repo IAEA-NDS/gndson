@@ -83,6 +83,16 @@ def check_one(path: Path, energies, verbose: bool = True) -> bool:
               file=sys.stderr)
 
     # 4b. Data check: cross sections evaluated at the sample energies.
+    # Only meaningful for ReactionSuite files; CovarianceSuite and other
+    # GNDS document types don't carry directly-evaluatable cross sections,
+    # so for them the structural check is the only check we can do.
+    if not hasattr(rs_a, "reactions"):
+        if verbose:
+            print(f"  data identity: SKIPPED ({type(rs_a).__name__} has no "
+                  "directly-evaluatable cross sections; structural-only)",
+                  file=sys.stderr)
+        return True
+
     # If a cross section type is not directly evaluatable on the ORIGINAL
     # (e.g. ResonancesWithBackground without reconstruction), we don't
     # treat it as a round-trip failure — it's a fudge-API limitation that
@@ -143,12 +153,19 @@ def main(argv=None) -> int:
         sys.exit("No input files given and no default file found. Pass paths explicitly.")
 
     ok_count = 0
+    crashed = 0
     for f in files:
-        if check_one(f, args.energies):
-            ok_count += 1
+        try:
+            if check_one(f, args.energies):
+                ok_count += 1
+        except Exception as e:
+            # Don't let one bad file kill the batch.
+            crashed += 1
+            print(f"  CRASH: {type(e).__name__}: {e}", file=sys.stderr)
 
-    print(f"\n[summary] {ok_count}/{len(files)} files round-trip identity-equal through FUDGE",
-          file=sys.stderr)
+    crash_note = f", {crashed} crashed" if crashed else ""
+    print(f"\n[summary] {ok_count}/{len(files)} files round-trip identity-equal "
+          f"through FUDGE{crash_note}", file=sys.stderr)
     return 0 if ok_count == len(files) else 1
 
 
