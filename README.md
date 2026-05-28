@@ -2,8 +2,13 @@
 
 Round-trip translator between **GNDS XML** and a clean, JSON-native representation.
 
-GNDS (Generalised Nuclear Database Structure) is the XML format used by nuclear data
-evaluators. `gndson` lets you work with GNDS files as ordinary JSON — read, edit,
+> ⚠️ **Early alpha (`0.1.0a1`).** gndson is a prototype. The JSON encoding,
+> the schema-pipeline names, and the public Python and CLI interfaces may
+> change without notice between minor versions. The XML ↔ JSON round-trip
+> contract (`spec.md` §9) is the stable commitment; everything else may evolve.
+> Pin a specific version if you depend on it.
+
+`gndson` lets you work with GNDS files as ordinary JSON — read, edit,
 diff, search with `jq` — and round-trip them back to XML without losing anything.
 
 Across the GNDS corpus (145 files, ~1.6M elements) the translator is verified at
@@ -11,6 +16,33 @@ two levels:
 
 - **Spec-equivalence** (per `spec.md` §9): 145/145 (100%)
 - **Byte-form-strict** (also preserves `<x/>` vs `<x></x>`): 145/145 (100%)
+
+## Background
+
+GNDS (Generalised Nuclear Database Structure) is the modern XML-based format
+for evaluated nuclear data, developed under the WPEC EGNDS group and intended
+as the successor to the long-serving ENDF-6 fixed-column text format. A GNDS
+document organises reactions, cross sections, distributions, covariances, and
+metadata in a single hierarchical structure.
+
+XML is rich and self-describing, but JSON is the lingua franca of modern
+tooling — every browser, every scripting language, every data-science stack
+reads JSON natively, every diff tool understands it, every cloud database
+stores it. Bringing GNDS within reach of that ecosystem is what gndson is for.
+
+gndson is a **mechanistic, bijective translator** between GNDS XML and JSON.
+It carries no opinion about what the data *should* look like — it preserves
+whatever the source XML expressed and emits JSON that reconstructs the same
+XML on the round trip. Schema-aware ergonomic transformations live in a
+separate layer above the bijective core, opt-in by name (see "Schema-aware
+ergonomic output" below).
+
+Because the translation is mechanical, it does **not** interfere with the
+work of the WPEC EGNDS group on the GNDS specification itself. Any future
+addition to the GNDS XML schema — new elements, new attributes, new
+structural patterns — is automatically reflected in the JSON representation
+without changes to gndson, and the schema-aware layer can be extended to
+recognise new patterns as they are formalised.
 
 ## Install
 
