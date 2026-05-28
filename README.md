@@ -163,6 +163,13 @@ importable; pass `--skip-fudge` to skip it explicitly. The third requires FUDGE
 See `spec.md` for the canonical-form definition, the round-trip contract, and the
 reasoning behind individual design decisions.
 
+## Design principles
+
+See `framework.md` for the broader operations / witnesses / round-trip-oracle
+framework that gndson is built on. Useful for deciding whether a new feature
+belongs in the translator, in a schema-augmentation layer above it, or in a
+user-facing reduction.
+
 ## Layout
 
 ```
