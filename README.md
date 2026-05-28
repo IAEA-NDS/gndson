@@ -23,7 +23,15 @@ GNDS (Generalised Nuclear Database Structure) is the modern XML-based format
 for evaluated nuclear data, developed under the WPEC EGNDS group and intended
 as the successor to the long-serving ENDF-6 fixed-column text format. A GNDS
 document organises reactions, cross sections, distributions, covariances, and
-metadata in a single hierarchical structure.
+metadata in a single hierarchical structure. The current normative
+specification is:
+
+> Mattoon, C., Gert, G., Holcomb, A., Brown, D., Wiarda, D., Chapman, C.,
+> Haeck, W., Staley, M. (2025). *GNDS-2.1 Specifications.* NEA Working
+> Paper NEA/WKP(2025)6, Nuclear Energy Agency, OECD.
+
+gndson tracks this revision; all section references in `spec.md` and
+`framework.md` cite it.
 
 XML is rich and self-describing, but JSON is the lingua franca of modern
 tooling — every browser, every scripting language, every data-science stack

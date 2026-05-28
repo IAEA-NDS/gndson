@@ -7,6 +7,11 @@ intending to lose it. The framework is the basis for design decisions in this
 repo (e.g., why the canonical form looks the way it does, why some features
 are deliberately *not* implemented at the translator level).
 
+All "GNDS PDF" / "GNDS 2.1 spec" references throughout this document refer to:
+> Mattoon, C., Gert, G., Holcomb, A., Brown, D., Wiarda, D., Chapman, C.,
+> Haeck, W., Staley, M. (2025). *GNDS-2.1 Specifications.* NEA Working
+> Paper NEA/WKP(2025)6, Nuclear Energy Agency, OECD.
+
 The premise is one sentence:
 
 > A modernization is trustworthy only if a machine can check it.

@@ -1,5 +1,11 @@
 # GNDS XML ↔ JSON Translation Spec — Draft v0.5
 
+All "GNDS PDF §X.Y" references in this document refer to:
+
+> Mattoon, C., Gert, G., Holcomb, A., Brown, D., Wiarda, D., Chapman, C.,
+> Haeck, W., Staley, M. (2025). *GNDS-2.1 Specifications.* NEA Working
+> Paper NEA/WKP(2025)6, Nuclear Energy Agency, OECD.
+
 ## Scope
 
 Translates GNDS XML files to/from a JSON representation with **perfect round-tripping up to non-encoding whitespace**: two XML files are *translator-equivalent* iff they produce identical JSON, and `untranslate(translate(X))` differs from `X` only in inter-tag whitespace, self-closing-vs-pair-form (modulo `_nocollapse`), attribute-quote character, attribute order (modulo `_attrorder`), and minimal entity re-escaping.
