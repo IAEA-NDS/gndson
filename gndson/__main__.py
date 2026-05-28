@@ -30,7 +30,13 @@ from typing import Any
 from . import __version__
 from .errors import GndsonError
 from .parser import parse_xml_bytes
-from .schema.pipelines import PIPELINES, get_pipeline, pipeline_names
+from .schema.pipelines import (
+    PIPELINES,
+    fuzzy_tags_for,
+    get_pipeline,
+    normalise_for_fuzzy_compare,
+    pipeline_names,
+)
 from .serializer import to_xml_string
 
 
@@ -110,12 +116,25 @@ def cmd_verify(args: argparse.Namespace) -> int:
             print(f"FAIL pipeline {args.pipeline!r}: "
                   f"{type(e).__name__}: {e}", file=sys.stderr)
             return 1
-        if restored != canonical:
-            print(f"FAIL pipeline {args.pipeline!r}: "
+        # Pipelines that are bijective at the GNDS-spec level but not at
+        # the canonical-form byte level use a whitespace-normalising
+        # comparator for the listed tokenised tags.
+        fuzzy_tags = fuzzy_tags_for(args.pipeline)
+        if fuzzy_tags is not None:
+            equal = (
+                normalise_for_fuzzy_compare(canonical, fuzzy_tags)
+                == normalise_for_fuzzy_compare(restored, fuzzy_tags)
+            )
+            equality_note = " (fuzzy: spec-level)"
+        else:
+            equal = restored == canonical
+            equality_note = ""
+        if not equal:
+            print(f"FAIL pipeline {args.pipeline!r}{equality_note}: "
                   f"forward + inverse is not identity on canonical",
                   file=sys.stderr)
             return 1
-        print(f"OK pipeline {args.pipeline!r}", file=sys.stderr)
+        print(f"OK pipeline {args.pipeline!r}{equality_note}", file=sys.stderr)
 
     # XML-layer round-trip check (always).
     try:

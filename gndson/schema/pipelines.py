@@ -105,3 +105,61 @@ def get_pipeline(name: str) -> Pipeline:
         raise KeyError(
             f"unknown pipeline {name!r}; available: {known}"
         ) from None
+
+
+def fuzzy_tags_for(name: str):
+    """Return the set of tag names whose text content should be
+    whitespace-normalised when comparing the inputs and outputs of a
+    round-trip through pipeline `name`, or `None` if the pipeline is
+    bijective at the canonical-form byte level."""
+    return FUZZY_PIPELINES.get(name)
+
+
+def normalise_for_fuzzy_compare(data, tags):
+    """Return a deep copy of `data` with whitespace-normalised text bodies
+    for elements whose tag is in `tags`. Handles three canonical shapes:
+
+      bare string:   {tag: "  1\\n  2  "} -> {tag: "1 2"}
+      object form:   {tag: {"@a": "x", "_text": "1\\n  2"}}
+                       -> {tag: {"@a": "x", "_text": "1 2"}}
+      list of either: each item gets the appropriate normalisation.
+
+    Used by the CLI's `verify --pipeline` and by the schema corpus
+    driver to compare pre- and post-round-trip JSON when the pipeline
+    is bijective at the GNDS-spec level but not at the canonical-form
+    byte level (i.e. listed in `FUZZY_PIPELINES`)."""
+    from copy import deepcopy
+    out = deepcopy(data)
+    _walk_normalise(out, tags, tag=None)
+    return out
+
+
+def _walk_normalise(data, tags, tag=None):
+    if not isinstance(data, dict):
+        return
+    # If this node is itself a tokenised element (object form), normalise
+    # its `_text` value.
+    if tag in tags:
+        text = data.get("_text")
+        if isinstance(text, str):
+            data["_text"] = " ".join(text.split())
+    # Process tokenised children of this node.
+    for k, v in list(data.items()):
+        if k.startswith("@") or k.startswith("_"):
+            continue
+        if k in tags:
+            if isinstance(v, str):
+                data[k] = " ".join(v.split())
+            elif isinstance(v, list):
+                data[k] = [
+                    " ".join(item.split()) if isinstance(item, str) else item
+                    for item in v
+                ]
+        # Recurse with tag context.
+        child = data[k]
+        if isinstance(child, dict):
+            _walk_normalise(child, tags, tag=k)
+        elif isinstance(child, list):
+            for item in child:
+                if isinstance(item, dict):
+                    _walk_normalise(item, tags, tag=k)
