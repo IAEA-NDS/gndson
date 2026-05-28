@@ -4,15 +4,19 @@ Command-line interface for gndson.
 Usage:
     gndson xml-to-json [INPUT] [-o OUTPUT] [--indent N] [--pipeline NAME]
     gndson json-to-xml [INPUT] [-o OUTPUT] [--pipeline NAME]
-    gndson verify INPUT [--strict]
+    gndson verify INPUT [--strict] [--pipeline NAME]
 
 INPUT defaults to stdin (or '-'); --output defaults to stdout.
 
-`--pipeline NAME` (on xml-to-json and json-to-xml) applies a named
-schema-layer transformation pipeline. On xml-to-json the pipeline's
-forward direction runs on the canonical JSON; on json-to-xml the
-inverse runs first, restoring canonical before serialising back to
-XML. Available pipelines: see `gndson.schema.pipelines.PIPELINES`.
+`--pipeline NAME`:
+  - On xml-to-json: applies the pipeline's forward direction after parsing.
+  - On json-to-xml: applies the pipeline's inverse before serialising
+    (input is assumed to be in pipeline-output form).
+  - On verify: adds a schema-layer round-trip check
+    (pipeline.inverse(pipeline.forward(canonical)) == canonical) on top
+    of the XML-layer round-trip check.
+
+Available pipelines: see `gndson.schema.pipelines.PIPELINES`.
 """
 
 from __future__ import annotations
@@ -80,17 +84,44 @@ def cmd_json_to_xml(args: argparse.Namespace) -> int:
 def cmd_verify(args: argparse.Namespace) -> int:
     """Verify round-trip property on a single XML file.
 
-    Spec-equivalence by default; --strict additionally requires byte-form fidelity.
+    By default checks XML-layer spec-equivalence (parse -> serialize ->
+    parse equivalent to original). `--strict` additionally requires
+    byte-form fidelity. `--pipeline NAME` additionally checks the
+    schema-layer round-trip (pipeline.inverse(pipeline.forward(canonical))
+    == canonical).
     """
     # Import lazily so the comparator is only loaded when the verify subcommand runs.
     from ._compare import parse_faithful, diff_summary
 
     raw = _read_input(args.input)
     try:
-        obj = parse_xml_bytes(raw)
-        re_xml = to_xml_string(obj).encode("utf-8")
+        canonical = parse_xml_bytes(raw)
     except GndsonError as e:
         print(f"translate error: {type(e).__name__}: {e}", file=sys.stderr)
+        return 2
+
+    # Schema-layer round-trip check (only when --pipeline given).
+    if args.pipeline:
+        pipeline = get_pipeline(args.pipeline)
+        try:
+            transformed = pipeline.forward(canonical)
+            restored = pipeline.inverse(transformed)
+        except Exception as e:
+            print(f"FAIL pipeline {args.pipeline!r}: "
+                  f"{type(e).__name__}: {e}", file=sys.stderr)
+            return 1
+        if restored != canonical:
+            print(f"FAIL pipeline {args.pipeline!r}: "
+                  f"forward + inverse is not identity on canonical",
+                  file=sys.stderr)
+            return 1
+        print(f"OK pipeline {args.pipeline!r}", file=sys.stderr)
+
+    # XML-layer round-trip check (always).
+    try:
+        re_xml = to_xml_string(canonical).encode("utf-8")
+    except GndsonError as e:
+        print(f"serialize error: {type(e).__name__}: {e}", file=sys.stderr)
         return 2
 
     spec_a = parse_faithful(raw)
@@ -153,6 +184,12 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Input XML file (default: stdin).")
     p.add_argument("--strict", action="store_true",
                    help="Also require byte-form fidelity (self-closing-vs-pair).")
+    p.add_argument("--pipeline", choices=pipeline_names(), default=None,
+                   metavar="NAME",
+                   help=("Also verify the schema-layer round-trip "
+                         "(pipeline.inverse(pipeline.forward(canonical)) == canonical) "
+                         "for the named pipeline. Available: "
+                         + ", ".join(pipeline_names())))
     p.set_defaults(func=cmd_verify)
 
     return ap

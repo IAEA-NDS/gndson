@@ -175,3 +175,34 @@ def test_every_named_pipeline_is_accepted():
     for name in pipeline_names():
         rc, _, _ = _run(["xml-to-json", "--pipeline", name], stdin=PLURAL_SAMPLE_XML)
         assert rc == 0, f"pipeline {name!r} was rejected by the CLI"
+
+
+def test_verify_with_pipeline_succeeds_on_real_input(tmp_path):
+    rxn = (
+        b'<?xml version="1.0" encoding="UTF-8"?>\n'
+        b'<reactionSuite><reactions>'
+        b'<reaction label="a"/><reaction label="b"/>'
+        b'</reactions></reactionSuite>'
+    )
+    p = tmp_path / "in.xml"
+    p.write_bytes(rxn)
+    rc, _, err = _run(["verify", str(p), "--pipeline", "ergonomic"])
+    assert rc == 0
+    # Both checks should report OK (pipeline first, then spec-equivalence).
+    assert "OK pipeline 'ergonomic'" in err
+    assert "OK spec-equivalence" in err
+
+
+def test_verify_with_pipeline_and_strict(tmp_path):
+    # All three checks should pass for clean canonical input.
+    rxn = (
+        b'<?xml version="1.0" encoding="UTF-8"?>\n'
+        b'<r><x/></r>'
+    )
+    p = tmp_path / "in.xml"
+    p.write_bytes(rxn)
+    rc, _, err = _run(["verify", str(p), "--strict", "--pipeline", "canonical"])
+    assert rc == 0
+    assert "OK pipeline 'canonical'" in err
+    assert "OK spec-equivalence" in err
+    assert "OK byte-form-strict" in err

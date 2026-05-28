@@ -49,11 +49,16 @@ gndson json-to-xml file.json -o out.xml
 ### Verify round-trip on a single file
 
 ```bash
-gndson verify file.xml             # spec-equivalence
-gndson verify file.xml --strict    # also require byte-form fidelity
+gndson verify file.xml                              # XML round-trip (spec-equivalence)
+gndson verify file.xml --strict                     # also require byte-form fidelity
+gndson verify file.xml --pipeline ergonomic        # also verify schema-layer round-trip
+gndson verify file.xml --pipeline ergonomic_full --strict   # all three checks
 ```
 
 `verify` exits 0 on success, 1 on a round-trip mismatch, 2 on a translator error.
+When `--pipeline NAME` is given, the schema-layer check
+(`pipeline.inverse(pipeline.forward(canonical)) == canonical`) runs in addition
+to the XML-layer check.
 
 ### Compose in a pipe
 
