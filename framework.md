@@ -213,6 +213,129 @@ Each new layer gets its own corpus-wide round-trip test, modelled on the
 existing one. A change is accepted as a transformation only when round-trip
 passes across the corpus.
 
+## Transformation library and auto-documentation
+
+This section applies to the layers above the bottom translator
+(`gndson/schema/*` in the architecture sketch above). The bottom translator
+itself is fixed; everything else is built as a library of small, composable
+transformations.
+
+### Each transformation is a self-contained unit
+
+A transformation in the library carries fixed metadata:
+
+- `name` — short identifier (e.g. `collapse_physicalQuantity_wrappers`).
+- `summary` — one-line description of what it does.
+- `applies_to` — predicate or spec citation defining which nodes it touches.
+- `witnesses_added` — list of `_*` keys it introduces in the forward direction.
+- `witnesses_consumed` — list of keys it removes in the forward direction
+  (typically empty for augmentations, populated for transformations that
+  use a prior augmentation as their witness).
+- `example_before` — a small JSON snippet showing a typical input shape.
+- `example_after` — the corresponding output snippet.
+- `forward(node, ctx)` — the forward function.
+- `inverse(node, ctx)` — the inverse.
+
+The before/after examples are **testable fixtures**: the test suite asserts
+`forward(example_before) == example_after` and `inverse(example_after) ==
+example_before`. A stale example breaks the build.
+
+### Pipelines are explicit ordered lists
+
+A consumer assembles a named pipeline by naming the transformations and
+their order:
+
+```python
+PHYSICS_FRIENDLY = Pipeline([
+    augment_kind,
+    collapse_physicalQuantity_wrappers,
+    coerce_numbers,
+])
+```
+
+Each pipeline gets its own corpus-wide round-trip test. A pipeline is
+accepted as a transformation only after passing that check across the full
+corpus. Different consumer audiences (display-oriented vs. analysis-oriented)
+get different named pipelines, all built from the same bottom layer and the
+same library.
+
+### Auto-documentation is end-state focused
+
+The doc generator produces a derived spec describing **what the JSON looks
+like at the end of the pipeline**, not a step-by-step chain narration. Each
+transformation contributes one section keyed by the element class it
+touches:
+
+```markdown
+# JSON form — pipeline "physics-friendly"
+
+## Final shape examples
+- A `mass` element appears as:
+    {"_kind": "double", "@label": "eval", "@value": "1.0", "@unit": "amu"}
+  Contributed by: collapse_physicalQuantity_wrappers
+
+- A `reaction` slot always appears as a list, even with one element.
+  Contributed by: always_array_enforcement
+
+## Witnesses preserved in the JSON
+- _kind — introduced by collapse_physicalQuantity_wrappers, required by its inverse.
+
+## Inverse direction
+Apply transformations in reverse order:
+coerce_numbers.inverse → collapse_physicalQuantity_wrappers.inverse → augment_kind.inverse.
+```
+
+No chain narration: the reader sees the final shape and a one-line
+attribution per element class. The local before/after examples on each
+transformation are used for testing and for understanding the transformation
+in isolation, not for the end-user spec.
+
+### Chain handling: witness flow accounting
+
+When transformations consume each other's witnesses (A introduces `_kind`,
+a later B uses then discards it), composition is handled by *witness flow
+accounting* — a static analysis of the pipeline's metadata, not a
+derivation:
+
+- For each witness key `_x`, track which transformation introduces it and
+  which (if any) consumes it.
+- If introduced and never consumed → it survives to the final JSON;
+  document it.
+- If introduced and consumed by a later transformation → internal artifact;
+  omit from end-state docs.
+- If consumed but never introduced → pipeline ordering error; the doc
+  generator (and the test runner) should refuse.
+
+This is aggregation, not state-machine reasoning, so the doc stays compact
+no matter how long the pipeline becomes.
+
+### Design rule: transformations should be locally meaningful
+
+If a transformation's behavior only makes sense given chain context that
+precedes it (e.g. "this only works after `coerce_numbers` has run"), it is
+wrong-sized and should be split. A reader should be able to look at one
+transformation's metadata and understand both its forward and its inverse
+without tracing the pipeline. The auto-doc tooling will surface this kind
+of pain early: a transformation whose `example_before` reflects a
+non-canonical intermediate shape is a tell.
+
+### Practical scale expectation
+
+The architecture can in principle support arbitrarily deep pipelines, but
+the GNDS scope suggests modesty:
+
+- Around 5–8 transformations total in the library (physicalQuantity
+  wrapper collapse; labelNode polymorphic collapse for
+  `crossSection`/`multiplicity`; always-array enforcement; `href` inlining;
+  number coercion; unit expansion; default-attribute omission).
+- Most are orthogonal — they touch different parts of the JSON.
+- Real chains are 2 deep in 2–3 places
+  (collapse → coerce_numbers; collapse → expand_units;
+  inline_href → cross-section operations).
+
+A combinatorial pipeline graph is not anticipated. If it materializes
+later, that is a re-think opportunity, not something to design for now.
+
 ## Heuristic checklist for new features
 
 When considering a feature that changes the JSON form, ask:
