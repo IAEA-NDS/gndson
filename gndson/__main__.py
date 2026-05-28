@@ -93,6 +93,8 @@ def cmd_docs(args: argparse.Namespace) -> int:
     from .schema.docs import render_all_markdown, render_markdown
     if args.all:
         out_dir = Path(args.output_dir)
+        if args.check:
+            return _docs_check_all(out_dir)
         out_dir.mkdir(parents=True, exist_ok=True)
         for name, md in render_all_markdown():
             out_file = out_dir / f"{name}.md"
@@ -107,7 +109,52 @@ def cmd_docs(args: argparse.Namespace) -> int:
               + ", ".join(pipeline_names()), file=sys.stderr)
         return 2
     md = render_markdown(args.name)
+    if args.check:
+        if not args.output:
+            print("docs: --check on a single pipeline requires -o/--output "
+                  "to point at the file to compare against",
+                  file=sys.stderr)
+            return 2
+        return _docs_check_single(Path(args.output), md)
     _write_output(args.output, md)
+    return 0
+
+
+def _docs_check_all(out_dir: Path) -> int:
+    """Check every pipeline's rendered markdown against an on-disk file.
+    Returns 0 if all match, 1 if any are missing or stale."""
+    from .schema.docs import render_all_markdown
+    stale: list = []
+    missing: list = []
+    for name, md in render_all_markdown():
+        path = out_dir / f"{name}.md"
+        if not path.is_file():
+            missing.append(path)
+            continue
+        if path.read_text(encoding="utf-8") != md:
+            stale.append(path)
+    if not missing and not stale:
+        print(f"all docs up to date in {out_dir}", file=sys.stderr)
+        return 0
+    for p in missing:
+        print(f"missing: {p}", file=sys.stderr)
+    for p in stale:
+        print(f"out of date: {p}", file=sys.stderr)
+    print(f"\n{len(missing) + len(stale)} doc(s) out of sync. "
+          f"Run `gndson docs --all --output-dir {out_dir}` to regenerate.",
+          file=sys.stderr)
+    return 1
+
+
+def _docs_check_single(path: Path, rendered: str) -> int:
+    """Check one rendered markdown blob against an on-disk file."""
+    if not path.is_file():
+        print(f"missing: {path}", file=sys.stderr)
+        return 1
+    if path.read_text(encoding="utf-8") != rendered:
+        print(f"out of date: {path}", file=sys.stderr)
+        return 1
+    print(f"up to date: {path}", file=sys.stderr)
     return 0
 
 
@@ -234,6 +281,12 @@ def build_parser() -> argparse.ArgumentParser:
                         "pipeline under --output-dir.")
     p.add_argument("--output-dir", default="docs/pipelines",
                    help="Directory for --all output (default: docs/pipelines).")
+    p.add_argument("--check", action="store_true",
+                   help="Re-render to memory and compare to existing files; "
+                        "exit 1 if any are missing or out of sync (no writing). "
+                        "Pairs with --all (compares everything under "
+                        "--output-dir) or with single-pipeline + -o "
+                        "(compares one file).")
     p.set_defaults(func=cmd_docs)
 
     p = sub.add_parser("verify", help="Check the round-trip property on a GNDS XML file.")

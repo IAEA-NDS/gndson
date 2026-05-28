@@ -193,6 +193,57 @@ def test_verify_with_pipeline_succeeds_on_real_input(tmp_path):
     assert "OK spec-equivalence" in err
 
 
+def test_docs_check_all_passes_when_up_to_date(tmp_path):
+    # Render all docs to a tmp dir, then --check the same dir.
+    rc, _, err = _run(["docs", "--all", "--output-dir", str(tmp_path)])
+    assert rc == 0
+    rc, _, err = _run(["docs", "--all", "--check", "--output-dir", str(tmp_path)])
+    assert rc == 0
+    assert "all docs up to date" in err
+
+
+def test_docs_check_all_detects_stale_file(tmp_path):
+    rc, _, _ = _run(["docs", "--all", "--output-dir", str(tmp_path)])
+    assert rc == 0
+    # Corrupt one rendered file.
+    target = tmp_path / "ergonomic.md"
+    target.write_text(target.read_text() + "\n## stale extra\n")
+    rc, _, err = _run(["docs", "--all", "--check", "--output-dir", str(tmp_path)])
+    assert rc == 1
+    assert "out of date" in err
+    assert "ergonomic.md" in err
+
+
+def test_docs_check_all_detects_missing_file(tmp_path):
+    rc, _, _ = _run(["docs", "--all", "--output-dir", str(tmp_path)])
+    assert rc == 0
+    # Delete one.
+    (tmp_path / "uniform.md").unlink()
+    rc, _, err = _run(["docs", "--all", "--check", "--output-dir", str(tmp_path)])
+    assert rc == 1
+    assert "missing" in err
+    assert "uniform.md" in err
+
+
+def test_docs_check_single_pipeline(tmp_path):
+    target = tmp_path / "wrappers.md"
+    rc, _, _ = _run(["docs", "wrappers", "-o", str(target)])
+    assert rc == 0
+    rc, _, err = _run(["docs", "wrappers", "--check", "-o", str(target)])
+    assert rc == 0
+    # Corrupt and re-check.
+    target.write_text("garbage")
+    rc, _, err = _run(["docs", "wrappers", "--check", "-o", str(target)])
+    assert rc == 1
+    assert "out of date" in err
+
+
+def test_docs_check_single_requires_output_path():
+    rc, _, err = _run(["docs", "wrappers", "--check"])
+    assert rc == 2
+    assert "-o/--output" in err
+
+
 def test_verify_with_pipeline_and_strict(tmp_path):
     # All three checks should pass for clean canonical input.
     rxn = (
