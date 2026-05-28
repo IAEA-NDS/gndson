@@ -79,11 +79,8 @@ def list_corpus_files(root: Path):
     return files
 
 
-def check_one(path: Path, pipeline: Pipeline):
-    try:
-        canonical = gndson.parse_xml_file(str(path))
-    except gndson.GndsonError as e:
-        return False, f"parse: {type(e).__name__}: {e}"
+def check_canonical(canonical: dict, pipeline: Pipeline):
+    """Round-trip check on a pre-parsed canonical dict."""
     try:
         transformed = pipeline.forward(canonical)
     except Exception as e:
@@ -97,16 +94,30 @@ def check_one(path: Path, pipeline: Pipeline):
     return True, ""
 
 
-def summarise(files, pipeline: Pipeline):
-    ok = 0
-    failures = []
+def summarise(files, pipelines):
+    """Run every pipeline against every file. Each XML file is parsed ONCE
+    and its canonical dict reused across all pipelines, avoiding O(files ×
+    pipelines) parse cost. Returns a list of (pipeline_name, ok_count,
+    failures) tuples in the order the pipelines were declared."""
+    results = {name: {"ok": 0, "failures": []} for name in pipelines}
     for f in files:
-        success, reason = check_one(f, pipeline)
-        if success:
-            ok += 1
-        else:
-            failures.append((f.name, reason))
-    return ok, failures
+        try:
+            canonical = gndson.parse_xml_file(str(f))
+        except Exception as e:
+            reason = f"parse: {type(e).__name__}: {e}"
+            for name in pipelines:
+                results[name]["failures"].append((f.name, reason))
+            continue
+        for name, pipeline in pipelines.items():
+            ok, reason = check_canonical(canonical, pipeline)
+            if ok:
+                results[name]["ok"] += 1
+            else:
+                results[name]["failures"].append((f.name, reason))
+    return [
+        (name, info["ok"], info["failures"])
+        for name, info in results.items()
+    ]
 
 
 def print_summary(name, ok, failures, total, stream=sys.stdout):
@@ -133,8 +144,7 @@ def test_schema_corpus_round_trip(request):
     if not files:
         pytest.skip(f"no .xml files found under {root}")
 
-    for pipeline_name, pipeline in PIPELINES_UNDER_TEST.items():
-        ok, failures = summarise(files, pipeline)
+    for pipeline_name, ok, failures in summarise(files, PIPELINES_UNDER_TEST):
         print_summary(pipeline_name, ok, failures, len(files))
 
 
@@ -159,8 +169,7 @@ def main():
         sys.exit(2)
 
     overall_ok = True
-    for pipeline_name, pipeline in PIPELINES_UNDER_TEST.items():
-        ok, failures = summarise(files, pipeline)
+    for pipeline_name, ok, failures in summarise(files, PIPELINES_UNDER_TEST):
         for name, reason in failures[: args.list_failures]:
             print(f"FAIL [{pipeline_name}] {name}: {reason}")
         if len(failures) > args.list_failures:
