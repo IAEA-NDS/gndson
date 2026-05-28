@@ -61,6 +61,25 @@ gndson verify file.xml --strict    # also require byte-form fidelity
 cat file.xml | gndson xml-to-json | gndson json-to-xml > round.xml
 ```
 
+### Schema-aware ergonomic output
+
+`xml-to-json` and `json-to-xml` accept `--pipeline NAME` to apply one of the
+named schema-layer pipelines (see `framework.md`). On `xml-to-json` the
+pipeline's forward direction runs after parsing; on `json-to-xml` the inverse
+runs before serialising. Available names: `canonical`, `arity`, `uniform`,
+`wrappers`, `heterogeneous`, `ergonomic`, `ergonomic_full`.
+
+```bash
+gndson xml-to-json file.xml --pipeline ergonomic        # collapse wrappers,
+                                                        # always-list plurals,
+                                                        # drop redundant inner tags
+gndson xml-to-json file.xml --pipeline ergonomic_full   # also collapse
+                                                        # heterogeneous containers
+gndson json-to-xml file.json --pipeline ergonomic       # inverse: take a JSON
+                                                        # produced by the same
+                                                        # pipeline back to XML
+```
+
 `python -m gndson <command> ...` works identically if you prefer not to install.
 
 ## Python API

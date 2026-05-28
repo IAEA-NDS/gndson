@@ -34,41 +34,17 @@ import pytest
 
 import gndson
 from gndson.schema.base import Pipeline
-from gndson.schema.arity import enforce_array_arity
-from gndson.schema.heterogeneous_inner_tag import drop_heterogeneous_inner_tag
-from gndson.schema.inner_tag import drop_uniform_inner_tag
-from gndson.schema.physical_quantity import (
-    augment_kind,
-    collapse_physicalQuantity_wrappers,
-)
+from gndson.schema.pipelines import PIPELINES
 
 
-# Named pipelines exercised by the corpus driver. Each is run independently
-# and gets its own pass-rate line.
+# Named pipelines exercised by the corpus driver. We test every pipeline
+# declared in `gndson.schema.pipelines` so the CLI and the corpus driver
+# stay in lock-step — anything a user can name on `--pipeline` is verified
+# to round-trip across the corpus.
 PIPELINES_UNDER_TEST = {
-    "enforce_array_arity": Pipeline([enforce_array_arity]),
-    "arity + drop_uniform_inner_tag": Pipeline([
-        enforce_array_arity,
-        drop_uniform_inner_tag,
-    ]),
-    "augment_kind + collapse_physicalQuantity_wrappers": Pipeline([
-        augment_kind,
-        collapse_physicalQuantity_wrappers,
-    ]),
-    "drop_heterogeneous_inner_tag": Pipeline([drop_heterogeneous_inner_tag]),
-    "ergonomic": Pipeline([
-        enforce_array_arity,
-        drop_uniform_inner_tag,
-        augment_kind,
-        collapse_physicalQuantity_wrappers,
-    ]),
-    "ergonomic_full": Pipeline([
-        enforce_array_arity,
-        drop_uniform_inner_tag,
-        augment_kind,
-        collapse_physicalQuantity_wrappers,
-        drop_heterogeneous_inner_tag,
-    ]),
+    name: pipeline for name, pipeline in PIPELINES.items()
+    # Skip the no-op identity pipeline (its round-trip check is trivial).
+    if len(pipeline.transformations) > 0
 }
 
 

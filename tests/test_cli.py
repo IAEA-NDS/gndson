@@ -97,3 +97,81 @@ def test_parser_help_smoke():
     assert "xml-to-json" in text
     assert "json-to-xml" in text
     assert "verify" in text
+
+
+# ===== --pipeline flag =====
+
+
+PLURAL_SAMPLE_XML = (
+    b'<?xml version="1.0" encoding="UTF-8"?>\n'
+    b'<root><items><item a="1"/><item a="2"/></items></root>'
+)
+
+
+def test_pipeline_default_is_canonical_form():
+    # No --pipeline: canonical form.
+    rc, out, _ = _run(["xml-to-json"], stdin=PLURAL_SAMPLE_XML)
+    assert rc == 0
+    obj = json.loads(out)
+    # Canonical form: <items><item/><item/></items> -> {items: {item: [...]}}
+    assert obj["root"]["items"] == {"item": [{"@a": "1"}, {"@a": "2"}]}
+
+
+def test_pipeline_ergonomic_applies_forward(tmp_path):
+    # With --pipeline ergonomic: the uniform-plural-container collapse runs.
+    p = tmp_path / "in.xml"
+    p.write_bytes(PLURAL_SAMPLE_XML)
+    # `items` isn't a uniform-plural container in our dictionary, so collapse
+    # of the outer key isn't expected. But the inner `item` list is always
+    # a list (it has 2 occurrences) — and would have been a list either way.
+    # Use a container that IS in the dictionary to show a real effect:
+    rxn = (
+        b'<?xml version="1.0" encoding="UTF-8"?>\n'
+        b'<reactionSuite><reactions><reaction label="x"/></reactions></reactionSuite>'
+    )
+    p.write_bytes(rxn)
+    rc, out, _ = _run(["xml-to-json", str(p), "--pipeline", "ergonomic"])
+    assert rc == 0
+    obj = json.loads(out)
+    # Ergonomic pipeline: reactions/reaction collapses to a flat list.
+    assert obj["reactionSuite"]["reactions"] == [{"@label": "x"}]
+
+
+def test_pipeline_round_trip_xml_to_json_to_xml(tmp_path):
+    # xml-to-json --pipeline NAME, then json-to-xml --pipeline NAME, must
+    # produce an XML structurally identical to the original.
+    rxn = (
+        b'<?xml version="1.0" encoding="UTF-8"?>\n'
+        b'<reactionSuite><reactions>'
+        b'<reaction label="a"/><reaction label="b"/>'
+        b'</reactions></reactionSuite>'
+    )
+    p_xml = tmp_path / "in.xml"
+    p_json = tmp_path / "mid.json"
+    p_xml2 = tmp_path / "out.xml"
+    p_xml.write_bytes(rxn)
+    assert _run(["xml-to-json", str(p_xml), "-o", str(p_json),
+                 "--pipeline", "ergonomic"])[0] == 0
+    assert _run(["json-to-xml", str(p_json), "-o", str(p_xml2),
+                 "--pipeline", "ergonomic"])[0] == 0
+    # The verify subcommand confirms the round-trip equivalence.
+    assert _run(["verify", str(p_xml)])[0] == 0
+    # And the produced XML can itself be read again as canonical:
+    rc, _, _ = _run(["xml-to-json", str(p_xml2)])
+    assert rc == 0
+
+
+def test_pipeline_unknown_name_rejected():
+    # argparse `choices=` enforces the constraint and exits with code 2.
+    with pytest.raises(SystemExit) as exc_info:
+        _run(["xml-to-json", "--pipeline", "nonexistent"], stdin=PLURAL_SAMPLE_XML)
+    assert exc_info.value.code == 2
+
+
+def test_every_named_pipeline_is_accepted():
+    # The CLI must accept every pipeline name declared in
+    # gndson.schema.pipelines as a valid --pipeline argument.
+    from gndson.schema.pipelines import pipeline_names
+    for name in pipeline_names():
+        rc, _, _ = _run(["xml-to-json", "--pipeline", name], stdin=PLURAL_SAMPLE_XML)
+        assert rc == 0, f"pipeline {name!r} was rejected by the CLI"

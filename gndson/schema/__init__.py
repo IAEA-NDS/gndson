@@ -30,6 +30,7 @@ from .heterogeneous_inner_tag import (
     DropHeterogeneousInnerTag,
     drop_heterogeneous_inner_tag,
 )
+from .pipelines import PIPELINES, get_pipeline, pipeline_names
 
 __all__ = [
     "Pipeline",
@@ -44,4 +45,7 @@ __all__ = [
     "collapse_physicalQuantity_wrappers",
     "DropHeterogeneousInnerTag",
     "drop_heterogeneous_inner_tag",
+    "PIPELINES",
+    "get_pipeline",
+    "pipeline_names",
 ]
