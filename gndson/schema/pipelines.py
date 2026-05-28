@@ -26,6 +26,10 @@ from .physical_quantity import (
     augment_kind,
     collapse_physicalQuantity_wrappers,
 )
+from .whitespace_text import (
+    TOKENIZED_NUMERIC_TAGS,
+    split_whitespace_text,
+)
 
 
 PIPELINES = {
@@ -38,6 +42,7 @@ PIPELINES = {
     "wrappers":      Pipeline([augment_kind,
                                collapse_physicalQuantity_wrappers]),
     "heterogeneous": Pipeline([drop_heterogeneous_inner_tag]),
+    "split_text":    Pipeline([split_whitespace_text]),
 
     # Recommended end-user pipelines.
     "ergonomic": Pipeline([
@@ -53,6 +58,24 @@ PIPELINES = {
         collapse_physicalQuantity_wrappers,
         drop_heterogeneous_inner_tag,
     ]),
+    "ergonomic_split": Pipeline([
+        enforce_array_arity,
+        drop_uniform_inner_tag,
+        augment_kind,
+        collapse_physicalQuantity_wrappers,
+        drop_heterogeneous_inner_tag,
+        split_whitespace_text,
+    ]),
+}
+
+
+# Pipelines that are bijective at the GNDS-spec level but NOT at the
+# canonical-form byte level. The corpus driver compares the pre- and
+# post-round-trip JSON after whitespace-normalising the listed tags in
+# both, mirroring the spec-level notion of equivalence.
+FUZZY_PIPELINES = {
+    "split_text":      TOKENIZED_NUMERIC_TAGS,
+    "ergonomic_split": TOKENIZED_NUMERIC_TAGS,
 }
 
 

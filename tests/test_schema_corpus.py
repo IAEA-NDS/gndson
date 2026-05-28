@@ -34,7 +34,7 @@ import pytest
 
 import gndson
 from gndson.schema.base import Pipeline
-from gndson.schema.pipelines import PIPELINES
+from gndson.schema.pipelines import FUZZY_PIPELINES, PIPELINES
 
 
 # Named pipelines exercised by the corpus driver. We test every pipeline
@@ -55,8 +55,15 @@ def list_corpus_files(root: Path):
     return files
 
 
-def check_canonical(canonical: dict, pipeline: Pipeline):
-    """Round-trip check on a pre-parsed canonical dict."""
+def check_canonical(canonical: dict, pipeline: Pipeline, fuzzy_tags=None):
+    """Round-trip check on a pre-parsed canonical dict.
+
+    If `fuzzy_tags` is provided (a set of tag names), the comparison
+    whitespace-normalises the listed tags in both the original canonical
+    and the round-trip result before comparing — for pipelines that are
+    bijective at the GNDS-spec level but not at the canonical-form byte
+    level (see FUZZY_PIPELINES in gndson.schema.pipelines).
+    """
     try:
         transformed = pipeline.forward(canonical)
     except Exception as e:
@@ -65,9 +72,64 @@ def check_canonical(canonical: dict, pipeline: Pipeline):
         restored = pipeline.inverse(transformed)
     except Exception as e:
         return False, f"inverse: {type(e).__name__}: {e}"
-    if restored != canonical:
-        return False, "mismatch"
+    if fuzzy_tags is not None:
+        if _normalise_ws(canonical, fuzzy_tags) != _normalise_ws(restored, fuzzy_tags):
+            return False, "mismatch (fuzzy)"
+    else:
+        if restored != canonical:
+            return False, "mismatch"
     return True, ""
+
+
+def _normalise_ws(data, tags):
+    """Return a deep copy of `data` with whitespace-normalised text bodies
+    for elements whose tag is in `tags`. Handles three shapes:
+
+      bare-string:  {values: "  1\\n  2\\n  3  "} -> {values: "1 2 3"}
+      object form:  {values: {"@a": "x", "_text": "1\\n 2"}}
+                       -> {values: {"@a": "x", "_text": "1 2"}}
+      list of either: each item gets the appropriate normalisation.
+
+    Tag context is tracked so we can normalise `_text` only when its
+    enclosing dict is itself a tokenised element.
+    """
+    from copy import deepcopy
+    out = deepcopy(data)
+    _walk_normalise(out, tags, tag=None)
+    return out
+
+
+def _walk_normalise(data, tags, tag=None):
+    if isinstance(data, dict):
+        # If this node IS a tokenised element in object form, normalise its
+        # `_text` value.
+        if tag in tags:
+            text = data.get("_text")
+            if isinstance(text, str):
+                data["_text"] = " ".join(text.split())
+        # Process tokenised children of this node.
+        for k, v in list(data.items()):
+            if k.startswith("@") or k.startswith("_"):
+                continue
+            if k in tags:
+                if isinstance(v, str):
+                    data[k] = " ".join(v.split())
+                elif isinstance(v, list):
+                    new_items = []
+                    for item in v:
+                        if isinstance(item, str):
+                            new_items.append(" ".join(item.split()))
+                        else:
+                            new_items.append(item)
+                    data[k] = new_items
+            # Recurse with tag context.
+            child = data[k]
+            if isinstance(child, dict):
+                _walk_normalise(child, tags, tag=k)
+            elif isinstance(child, list):
+                for item in child:
+                    if isinstance(item, dict):
+                        _walk_normalise(item, tags, tag=k)
 
 
 def summarise(files, pipelines):
@@ -85,7 +147,8 @@ def summarise(files, pipelines):
                 results[name]["failures"].append((f.name, reason))
             continue
         for name, pipeline in pipelines.items():
-            ok, reason = check_canonical(canonical, pipeline)
+            fuzzy = FUZZY_PIPELINES.get(name)
+            ok, reason = check_canonical(canonical, pipeline, fuzzy_tags=fuzzy)
             if ok:
                 results[name]["ok"] += 1
             else:
