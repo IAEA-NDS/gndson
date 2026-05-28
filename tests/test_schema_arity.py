@@ -161,5 +161,14 @@ class TestMetadata:
 
     def test_dictionary_contains_expected_uniform_containers(self):
         # Spot-check a few entries we definitely expect, from the GNDS spec.
-        for k in ("reactions", "products", "axes", "baryons", "nuclides"):
+        for k in ("reactions", "products", "baryons", "nuclides", "isotopes"):
             assert k in UNIFORM_PLURAL_CONTAINERS
+
+    def test_known_heterogeneous_containers_are_excluded(self):
+        # Per GNDS 2.1 spec: <axes> may hold both <axis> and <grid>
+        # (§5.1.1); <aliases> may hold both <alias> and <metaStable>
+        # (§12.1.2). They must NOT be in the uniform dictionary —
+        # they will be handled by the heterogeneous-inner transformation
+        # in step 4 with the _kind witness.
+        for k in ("axes", "aliases"):
+            assert k not in UNIFORM_PLURAL_CONTAINERS

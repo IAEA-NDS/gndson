@@ -29,12 +29,17 @@ from .base import Transformation
 
 
 # Curated map: plural-container tag → uniform inner tag.
-# Source: GNDS 2.1 spec (cross-checked against the corpus).
+# Each entry is a container whose spec definition allows exactly one
+# inner element name (modulo absence). Heterogeneous-inner containers
+# (e.g. <axes> which the spec §5.1.1 allows to hold both <axis> and
+# <grid>; <aliases> which §12.1.2 allows to hold both <alias> and
+# <metaStable>; functional containers like <function1ds>, <styles>,
+# <distribution>, <sums>) are intentionally absent — they will be
+# handled by a later transformation in conjunction with the `_kind`
+# witness (framework.md step 4).
 UNIFORM_PLURAL_CONTAINERS = {
     "reactions":         "reaction",
     "products":          "product",
-    "axes":              "axis",
-    "aliases":           "alias",
     "baryons":           "baryon",
     "gaugeBosons":       "gaugeBoson",
     "nuclides":          "nuclide",
