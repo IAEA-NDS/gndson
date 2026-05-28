@@ -49,7 +49,7 @@ DEFAULT_INPUTS = [
 # ----- the round-trip identity check -----
 
 
-def check_one(path: Path, energies, verbose: bool = True) -> bool:
+def check_one(path: Path, energies, *, pipeline_name=None, verbose: bool = True) -> bool:
     from fudge import GNDS_file
 
     if verbose:
@@ -59,11 +59,17 @@ def check_one(path: Path, energies, verbose: bool = True) -> bool:
     rs_a = GNDS_file.read(str(path))
     fudge_a = rs_a.toXML()
 
-    # 2. Round-trip via gndson.
+    # 2. Round-trip via gndson, optionally through a named schema pipeline.
     with tempfile.NamedTemporaryFile(suffix=".xml", delete=False) as tmp:
         rt_path = Path(tmp.name)
     try:
-        gndson.write_xml_file(gndson.parse_xml_file(str(path)), str(rt_path))
+        canonical = gndson.parse_xml_file(str(path))
+        if pipeline_name is not None:
+            from gndson.schema.pipelines import get_pipeline
+            pipeline = get_pipeline(pipeline_name)
+            ergonomic = pipeline.forward(canonical)
+            canonical = pipeline.inverse(ergonomic)
+        gndson.write_xml_file(canonical, str(rt_path))
 
         # 3. Round-trip output through FUDGE.
         rs_b = GNDS_file.read(str(rt_path))
@@ -139,6 +145,11 @@ def main(argv=None) -> int:
     ap.add_argument("--energies", type=float, nargs="+",
                     default=[0.025, 1.0, 1e3, 1e6, 1e7],
                     help="Energies (eV) at which to compare cross sections.")
+    ap.add_argument("--pipeline", default=None, metavar="NAME",
+                    help=("Apply a named gndson schema pipeline (forward + "
+                          "inverse) between the gndson parse and the re-emit. "
+                          "Demonstrates that FUDGE cannot tell the difference "
+                          "even after the full ergonomic transformation chain."))
     args = ap.parse_args(argv)
 
     try:
@@ -156,7 +167,7 @@ def main(argv=None) -> int:
     crashed = 0
     for f in files:
         try:
-            if check_one(f, args.energies):
+            if check_one(f, args.energies, pipeline_name=args.pipeline):
                 ok_count += 1
         except Exception as e:
             # Don't let one bad file kill the batch.
