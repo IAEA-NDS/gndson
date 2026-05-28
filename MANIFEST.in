@@ -1,0 +1,5 @@
+include LICENSE
+include README.md
+include spec.md
+include framework.md
+recursive-include docs *.md

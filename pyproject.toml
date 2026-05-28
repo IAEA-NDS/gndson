@@ -3,21 +3,34 @@ name = "gndson"
 version = "0.1.0a1"
 description = "Round-trip translator between GNDS XML and JSON"
 readme = "README.md"
-authors = [{ name = "Georg Schnabel" }]
-license = { text = "MIT" }
+authors = [{ name = "Georg Schnabel", email = "g.schnabel@iaea.org" }]
+license = "MIT"
+license-files = ["LICENSE"]
+keywords = ["gnds", "endf", "nuclear-data", "xml", "json", "round-trip"]
 requires-python = ">=3.7"
 dependencies = []
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
     "Intended Audience :: Science/Research",
-    "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.7",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Topic :: Scientific/Engineering :: Physics",
     "Topic :: File Formats",
     "Topic :: Text Processing :: Markup :: XML",
 ]
+
+[project.urls]
+Homepage = "https://github.com/IAEA-NDS/gndson"
+Repository = "https://github.com/IAEA-NDS/gndson"
+Issues = "https://github.com/IAEA-NDS/gndson/issues"
 
 [project.scripts]
 gndson = "gndson.__main__:main"
