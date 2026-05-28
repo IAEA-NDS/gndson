@@ -336,6 +336,94 @@ the GNDS scope suggests modesty:
 A combinatorial pipeline graph is not anticipated. If it materializes
 later, that is a re-think opportunity, not something to design for now.
 
+## First-cut schema-layer build order
+
+Concrete plan for the initial transformation library, in suggested
+implementation order. Each step is testable in isolation via its own
+corpus-wide round-trip and reuses infrastructure or dictionaries built
+by earlier steps.
+
+### 1. `enforce_array_arity`
+
+Always-list discipline for plural-named containers. A curated dictionary
+maps tag names (`reactions`, `products`, `axes`, ...) to their multiplicity
+class. Forward: if a container's child key is in the always-list set,
+ensure its value is a JSON list — wrap a scalar in a 1-element list, emit
+`[]` for zero occurrences. Inverse: trust the JSON shape (the dictionary
+is the source of truth at both ends).
+
+- Witness: none in the JSON.
+- Scope: all known plural containers, regardless of inner type.
+- Why first: simplest exercise of the schema-layer infrastructure (no
+  per-element schema check, no fallback case, no JSON witness). Builds
+  the `Transformation` base class and the corpus test harness.
+
+### 2. `drop_uniform_inner_tag`
+
+For plural containers whose inner element is a single known tag
+(`reactions/reaction`, `products/product`, `axes/axis`,
+`baryons/baryon`, ...), collapse the redundant inner key:
+`{Xs: [obj1, obj2]}` instead of `{Xs: {X: [obj1, obj2]}}`. Inverse:
+re-wrap using the inner tag name fetched from the same dictionary.
+
+- Witness: none in the JSON.
+- Scope: the uniform-inner subset of the plural-container dictionary.
+- Why second: biggest ergonomic win for downstream consumers; reuses
+  the dictionary from step 1 (one more column in the same table); still
+  no JSON-level witness needed.
+
+### 3. `augment_kind` + `collapse_physicalQuantity_wrappers`
+
+A pair of transformations targeting the GNDS `physicalQuantityNode`
+abstract class. `augment_kind` annotates eligible wrappers with
+`_kind: <inner-tag>` (e.g. `_kind: "double"`); the collapse hoists the
+inner child's attributes onto the wrapper and uses `_kind` as the
+witness to invert.
+
+- Witness: `_kind`, per-element. Survives in the end-state JSON.
+- Scope: 10 spec-defined wrappers (mass, charge, spin, parity, halflife,
+  energy, Q, probability, plus reaction-data mass/energy). Falls back
+  to no-collapse for wrappers with multiple children (style-labelled
+  alternates) or unexpected attributes.
+- Why third: introduces the witness mechanism and exercises pipeline
+  composition with a real (augment → collapse) chain. The witness flow
+  accounting in the auto-doc gets its first real test here.
+
+### 4. `drop_heterogeneous_inner_tag` (opt-in)
+
+For plural containers whose inner element can be one of several types
+(`function1ds` → {`XYs1d`, `regions1d`, `constant1d`, ...},
+`distribution` → {`angularTwoBody`, `isotropic2d`, ...}, `styles`,
+`sums`, ...), collapse to a list of objects each carrying `_kind` — the
+same witness as in step 3.
+
+- Witness: `_kind`, per-element. Same mechanism as step 3.
+- Scope: the heterogeneous-inner subset of the plural-container
+  dictionary.
+- Why fourth: reuses the `_kind` machinery from step 3; opt-in because
+  some consumers prefer the inner tag name visible as the key rather
+  than tucked under `_kind`.
+
+### Recommended default pipeline
+
+After all four steps land:
+
+```python
+ERGONOMIC = Pipeline([
+    enforce_array_arity,
+    drop_uniform_inner_tag,
+    augment_kind,
+    collapse_physicalQuantity_wrappers,
+    # drop_heterogeneous_inner_tag,  # opt-in
+])
+```
+
+Each pipeline gets its own corpus-wide round-trip test. Steps 1–4 are
+orthogonal in the witness sense (only step 3 introduces and uses a JSON
+witness; the others are external-dictionary transformations), so the
+pipeline order is essentially free — convention puts augmentations
+before their consumers and the independent steps near the front.
+
 ## Heuristic checklist for new features
 
 When considering a feature that changes the JSON form, ask:
