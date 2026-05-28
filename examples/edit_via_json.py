@@ -4,8 +4,7 @@ through ordinary Python dict/list operations, save it, and verify the
 change with FUDGE.
 
 This script:
-  1. Loads an input GNDS XML file (default: n_0125_1-H-1.xml from a
-     local mirror of the GNDS reference corpus).
+  1. Loads the input GNDS XML file given on the command line.
   2. Translates it to JSON via gndson.
   3. Scales the first reaction's first XYs1d cross-section block by a
      user-supplied factor (default 2.0).
@@ -17,7 +16,7 @@ This script:
      show the change took effect.
 
 Run:
-    python examples/edit_via_json.py [PATH/to/source.xml] \\
+    python examples/edit_via_json.py PATH/to/source.xml \\
         [-o out.xml] [--factor 2.0] [--energy 1e6] [--skip-fudge]
 
 The cross-section walk is deliberately specific to the GNDS layout used
@@ -40,22 +39,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import gndson
 
 
-DEFAULT_SOURCES = [
-    Path("PATH/to/corpus/n_0125_1-H-1.xml"),
-]
-
-
 # ----- helpers -----
-
-
-def find_default_source() -> Path:
-    for p in DEFAULT_SOURCES:
-        if p.is_file():
-            return p
-    sys.exit(
-        "No default source XML found. Pass the path explicitly:\n"
-        "  python examples/edit_via_json.py PATH/to/source.xml"
-    )
 
 
 def scale_first_xys_values(json_data: dict, factor: float) -> tuple[str, str]:
@@ -108,11 +92,12 @@ def tag_library(json_data: dict, new_library: str) -> None:
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[1])
-    ap.add_argument("input", nargs="?", type=Path, default=None,
-                    help="Source GNDS XML file (default: bundled H-1 corpus file).")
+    ap.add_argument("input", type=Path,
+                    help="Source GNDS XML file (e.g. an H-1 reactionSuite "
+                         "produced by FUDGE).")
     ap.add_argument("-o", "--output", type=Path,
-                    default=Path("/tmp/gndson_edited_h1.xml"),
-                    help="Where to write the modified XML (default: /tmp/gndson_edited_h1.xml).")
+                    default=Path("/tmp/gndson_edited.xml"),
+                    help="Where to write the modified XML (default: /tmp/gndson_edited.xml).")
     ap.add_argument("--factor", type=float, default=2.0,
                     help="Multiply the cross-section σ values by this factor (default 2.0).")
     ap.add_argument("--energy", type=float, default=1e6,
@@ -121,11 +106,12 @@ def main(argv=None) -> int:
                     help="Do not attempt the FUDGE verification step.")
     args = ap.parse_args(argv)
 
-    src = args.input if args.input is not None else find_default_source()
-    print(f"[source]   {src}", file=sys.stderr)
+    if not args.input.is_file():
+        sys.exit(f"Source file not found: {args.input}")
+    print(f"[source]   {args.input}", file=sys.stderr)
 
     # 1. Load via gndson.
-    data = gndson.parse_xml_file(str(src))
+    data = gndson.parse_xml_file(str(args.input))
 
     # 2. Edit in JSON-land.
     before, after = scale_first_xys_values(data, args.factor)
@@ -155,7 +141,7 @@ def main(argv=None) -> int:
         cs = rs.reactions[0].crossSection.evaluated
         return cs.evaluate(args.energy)
 
-    original_xs = eval_first_xs(src)
+    original_xs = eval_first_xs(args.input)
     edited_xs = eval_first_xs(args.output)
     ratio = edited_xs / original_xs if original_xs else float("nan")
     print(f"  original σ({args.energy:g} eV) = {original_xs:g} b", file=sys.stderr)

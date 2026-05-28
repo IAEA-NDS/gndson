@@ -20,9 +20,9 @@ If both checks pass for a file, gndson's round trip is "identity through
 FUDGE" — FUDGE cannot tell the original from the round-tripped version.
 
 Run:
-    python examples/roundtrip_through_fudge.py             # default file
-    python examples/roundtrip_through_fudge.py FILE...     # specific files
-    python examples/roundtrip_through_fudge.py --energies 0.025 1 1e3 1e6
+    python examples/roundtrip_through_fudge.py FILE [FILE ...]
+    python examples/roundtrip_through_fudge.py FILE --energies 0.025 1 1e3 1e6
+    python examples/roundtrip_through_fudge.py FILE --pipeline ergonomic_split_data
 
 Requires FUDGE to be importable.
 """
@@ -39,11 +39,6 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import gndson
 from gndson._compare import parse_faithful, diff_summary
-
-
-DEFAULT_INPUTS = [
-    Path("PATH/to/corpus/n_0125_1-H-1.xml"),
-]
 
 
 # ----- the round-trip identity check -----
@@ -140,8 +135,8 @@ def check_one(path: Path, energies, *, pipeline_name=None, verbose: bool = True)
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[1])
-    ap.add_argument("files", nargs="*", type=Path,
-                    help="GNDS XML files to check (default: bundled H-1 corpus file).")
+    ap.add_argument("files", nargs="+", type=Path,
+                    help="GNDS XML files to check (one or more).")
     ap.add_argument("--energies", type=float, nargs="+",
                     default=[0.025, 1.0, 1e3, 1e6, 1e7],
                     help="Energies (eV) at which to compare cross sections.")
@@ -159,9 +154,10 @@ def main(argv=None) -> int:
               file=sys.stderr)
         return 2
 
-    files = args.files if args.files else [p for p in DEFAULT_INPUTS if p.is_file()]
-    if not files:
-        sys.exit("No input files given and no default file found. Pass paths explicitly.")
+    files = args.files
+    missing = [f for f in files if not f.is_file()]
+    if missing:
+        sys.exit(f"Files not found: {missing}")
 
     ok_count = 0
     crashed = 0
