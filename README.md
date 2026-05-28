@@ -148,8 +148,15 @@ loads a corpus GNDS file, scales a cross section in JSON-land via ordinary dict
 indexing, writes the modified XML, and uses FUDGE to confirm the change is
 visible (`σ(1 MeV) = 4.25 b` → `8.49 b` after `--factor 2.0`).
 
-Both scripts skip the FUDGE step gracefully when FUDGE isn't importable; pass
-`--skip-fudge` to skip it explicitly.
+`examples/roundtrip_through_fudge.py` proves *round-trip identity*: for one or
+more input files it reads the ORIGINAL with FUDGE and the gndson-round-tripped
+version with FUDGE, then compares both `toXML()` outputs (via gndson's own
+faithful comparator) AND the cross-section values evaluated at sample energies.
+FUDGE cannot tell the original from the round-trip.
+
+The first two scripts skip the FUDGE step gracefully when FUDGE isn't
+importable; pass `--skip-fudge` to skip it explicitly. The third requires FUDGE
+(it is the whole point).
 
 ## Specification
 
