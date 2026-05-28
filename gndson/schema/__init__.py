@@ -30,6 +30,7 @@ from .heterogeneous_inner_tag import (
     DropHeterogeneousInnerTag,
     drop_heterogeneous_inner_tag,
 )
+from .data_columns import ExpandDataColumns, expand_data_columns
 from .pipelines import PIPELINES, get_pipeline, pipeline_names
 from .whitespace_text import SplitWhitespaceText, split_whitespace_text
 
@@ -51,4 +52,6 @@ __all__ = [
     "pipeline_names",
     "SplitWhitespaceText",
     "split_whitespace_text",
+    "ExpandDataColumns",
+    "expand_data_columns",
 ]

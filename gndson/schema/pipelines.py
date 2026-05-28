@@ -20,6 +20,7 @@ from __future__ import annotations
 
 from .arity import enforce_array_arity
 from .base import Pipeline
+from .data_columns import expand_data_columns
 from .heterogeneous_inner_tag import drop_heterogeneous_inner_tag
 from .inner_tag import drop_uniform_inner_tag
 from .physical_quantity import (
@@ -43,6 +44,7 @@ PIPELINES = {
                                collapse_physicalQuantity_wrappers]),
     "heterogeneous": Pipeline([drop_heterogeneous_inner_tag]),
     "split_text":    Pipeline([split_whitespace_text]),
+    "data_columns":  Pipeline([expand_data_columns]),
 
     # Recommended end-user pipelines.
     "ergonomic": Pipeline([
@@ -66,6 +68,15 @@ PIPELINES = {
         drop_heterogeneous_inner_tag,
         split_whitespace_text,
     ]),
+    "ergonomic_split_data": Pipeline([
+        enforce_array_arity,
+        drop_uniform_inner_tag,
+        augment_kind,
+        collapse_physicalQuantity_wrappers,
+        drop_heterogeneous_inner_tag,
+        split_whitespace_text,
+        expand_data_columns,
+    ]),
 }
 
 
@@ -74,8 +85,9 @@ PIPELINES = {
 # post-round-trip JSON after whitespace-normalising the listed tags in
 # both, mirroring the spec-level notion of equivalence.
 FUZZY_PIPELINES = {
-    "split_text":      TOKENIZED_NUMERIC_TAGS,
-    "ergonomic_split": TOKENIZED_NUMERIC_TAGS,
+    "split_text":           TOKENIZED_NUMERIC_TAGS,
+    "ergonomic_split":      TOKENIZED_NUMERIC_TAGS,
+    "ergonomic_split_data": TOKENIZED_NUMERIC_TAGS,
 }
 
 
