@@ -20,6 +20,12 @@ collapse, heterogeneous-inner collapse) are detailed in the
 from .base import Pipeline, Transformation
 from .arity import EnforceArrayArity, enforce_array_arity
 from .inner_tag import DropUniformInnerTag, drop_uniform_inner_tag
+from .physical_quantity import (
+    AugmentKind,
+    CollapsePhysicalQuantityWrappers,
+    augment_kind,
+    collapse_physicalQuantity_wrappers,
+)
 
 __all__ = [
     "Pipeline",
@@ -28,4 +34,8 @@ __all__ = [
     "enforce_array_arity",
     "DropUniformInnerTag",
     "drop_uniform_inner_tag",
+    "AugmentKind",
+    "CollapsePhysicalQuantityWrappers",
+    "augment_kind",
+    "collapse_physicalQuantity_wrappers",
 ]

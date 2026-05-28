@@ -36,6 +36,10 @@ import gndson
 from gndson.schema.base import Pipeline
 from gndson.schema.arity import enforce_array_arity
 from gndson.schema.inner_tag import drop_uniform_inner_tag
+from gndson.schema.physical_quantity import (
+    augment_kind,
+    collapse_physicalQuantity_wrappers,
+)
 
 
 # Named pipelines exercised by the corpus driver. Each is run independently
@@ -45,6 +49,16 @@ PIPELINES_UNDER_TEST = {
     "arity + drop_uniform_inner_tag": Pipeline([
         enforce_array_arity,
         drop_uniform_inner_tag,
+    ]),
+    "augment_kind + collapse_physicalQuantity_wrappers": Pipeline([
+        augment_kind,
+        collapse_physicalQuantity_wrappers,
+    ]),
+    "ergonomic": Pipeline([
+        enforce_array_arity,
+        drop_uniform_inner_tag,
+        augment_kind,
+        collapse_physicalQuantity_wrappers,
     ]),
 }
 
