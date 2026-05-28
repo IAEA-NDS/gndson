@@ -5,6 +5,8 @@ Usage:
     gndson xml-to-json [INPUT] [-o OUTPUT] [--indent N] [--pipeline NAME]
     gndson json-to-xml [INPUT] [-o OUTPUT] [--pipeline NAME]
     gndson verify INPUT [--strict] [--pipeline NAME]
+    gndson docs NAME [-o OUTPUT]
+    gndson docs --all [--output-dir DIR]
 
 INPUT defaults to stdin (or '-'); --output defaults to stdout.
 
@@ -84,6 +86,28 @@ def cmd_json_to_xml(args: argparse.Namespace) -> int:
         obj = get_pipeline(args.pipeline).inverse(obj)
     out = to_xml_string(obj)
     _write_output(args.output, out)
+    return 0
+
+
+def cmd_docs(args: argparse.Namespace) -> int:
+    from .schema.docs import render_all_markdown, render_markdown
+    if args.all:
+        out_dir = Path(args.output_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        for name, md in render_all_markdown():
+            out_file = out_dir / f"{name}.md"
+            out_file.write_text(md, encoding="utf-8")
+            print(f"wrote {out_file}", file=sys.stderr)
+        return 0
+    if not args.name:
+        print("docs: provide a pipeline NAME or use --all", file=sys.stderr)
+        return 2
+    if args.name not in pipeline_names():
+        print(f"docs: unknown pipeline {args.name!r}; available: "
+              + ", ".join(pipeline_names()), file=sys.stderr)
+        return 2
+    md = render_markdown(args.name)
+    _write_output(args.output, md)
     return 0
 
 
@@ -197,6 +221,20 @@ def build_parser() -> argparse.ArgumentParser:
                          "form rather than canonical). Available: "
                          + ", ".join(pipeline_names())))
     p.set_defaults(func=cmd_json_to_xml)
+
+    p = sub.add_parser("docs",
+                       help="Render markdown documentation for a named pipeline.")
+    p.add_argument("name", nargs="?", default=None, metavar="NAME",
+                   help=("Pipeline name to render (omit when using --all). "
+                         "Available: " + ", ".join(pipeline_names())))
+    p.add_argument("-o", "--output", default=None,
+                   help="Output markdown file (default: stdout). Ignored when --all is given.")
+    p.add_argument("--all", action="store_true",
+                   help="Render every named pipeline; write one file per "
+                        "pipeline under --output-dir.")
+    p.add_argument("--output-dir", default="docs/pipelines",
+                   help="Directory for --all output (default: docs/pipelines).")
+    p.set_defaults(func=cmd_docs)
 
     p = sub.add_parser("verify", help="Check the round-trip property on a GNDS XML file.")
     p.add_argument("input", nargs="?", default=None,

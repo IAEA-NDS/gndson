@@ -31,6 +31,7 @@ from .heterogeneous_inner_tag import (
     drop_heterogeneous_inner_tag,
 )
 from .data_columns import ExpandDataColumns, expand_data_columns
+from .docs import DOC_FIXTURE, render_all_markdown, render_markdown
 from .pipelines import PIPELINES, get_pipeline, pipeline_names
 from .whitespace_text import SplitWhitespaceText, split_whitespace_text
 
@@ -54,4 +55,7 @@ __all__ = [
     "split_whitespace_text",
     "ExpandDataColumns",
     "expand_data_columns",
+    "DOC_FIXTURE",
+    "render_markdown",
+    "render_all_markdown",
 ]
