@@ -11,8 +11,11 @@ Round-trip translator between **GNDS XML** and a clean, JSON-native representati
 `gndson` lets you work with GNDS files as ordinary JSON — read, edit,
 diff, search with `jq` — and round-trip them back to XML without losing anything.
 
-Across the GNDS corpus (145 files, ~1.6M elements) the translator is verified at
-two levels:
+The test corpus used during development is every file of the **FENDL 3.2c
+neutron sub-library** that was successfully converted to GNDS XML — 145
+files in total (~1.6M XML elements), covering both `reactionSuite` and
+`covarianceSuite` documents. The translator is verified on this corpus
+at two levels:
 
 - **Spec-equivalence** (per `spec.md` §9): 145/145 (100%)
 - **Byte-form-strict** (also preserves `<x/>` vs `<x></x>`): 145/145 (100%)
