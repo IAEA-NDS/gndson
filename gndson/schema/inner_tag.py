@@ -30,7 +30,6 @@ See framework.md §"First-cut schema-layer build order" / step 2.
 """
 
 from __future__ import annotations
-from copy import deepcopy
 from typing import Any, Callable
 
 from .arity import UNIFORM_PLURAL_CONTAINERS
@@ -55,11 +54,11 @@ class DropUniformInnerTag(Transformation):
         "products":  [],
     }
 
-    def forward(self, data: Any) -> Any:
-        return _walk(deepcopy(data), _collapse)
+    def _forward_inplace(self, data: Any) -> None:
+        _walk(data, _collapse)
 
-    def inverse(self, data: Any) -> Any:
-        return _walk(deepcopy(data), _expand)
+    def _inverse_inplace(self, data: Any) -> None:
+        _walk(data, _expand)
 
 
 # ----- internal -----

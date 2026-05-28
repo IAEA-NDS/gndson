@@ -34,7 +34,6 @@ See framework.md §"First-cut schema-layer build order" / step 4.
 """
 
 from __future__ import annotations
-from copy import deepcopy
 from typing import Any, Callable, Dict, List
 
 from .base import Transformation
@@ -81,11 +80,11 @@ class DropHeterogeneousInnerTag(Transformation):
         ]
     }
 
-    def forward(self, data: Any) -> Any:
-        return _walk(deepcopy(data), _collapse)
+    def _forward_inplace(self, data: Any) -> None:
+        _walk(data, _collapse)
 
-    def inverse(self, data: Any) -> Any:
-        return _walk(deepcopy(data), _expand)
+    def _inverse_inplace(self, data: Any) -> None:
+        _walk(data, _expand)
 
 
 # ----- internal -----

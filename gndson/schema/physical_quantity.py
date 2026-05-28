@@ -26,7 +26,6 @@ See framework.md §"First-cut schema-layer build order" / step 3.
 """
 
 from __future__ import annotations
-from copy import deepcopy
 from typing import Any, Callable, Optional
 
 from .base import Transformation
@@ -67,11 +66,11 @@ class AugmentKind(Transformation):
         }
     }
 
-    def forward(self, data: Any) -> Any:
-        return _walk(deepcopy(data), _annotate)
+    def _forward_inplace(self, data: Any) -> None:
+        _walk(data, _annotate)
 
-    def inverse(self, data: Any) -> Any:
-        return _walk(deepcopy(data), _strip_kind)
+    def _inverse_inplace(self, data: Any) -> None:
+        _walk(data, _strip_kind)
 
 
 class CollapsePhysicalQuantityWrappers(Transformation):
@@ -100,11 +99,11 @@ class CollapsePhysicalQuantityWrappers(Transformation):
         }
     }
 
-    def forward(self, data: Any) -> Any:
-        return _walk(deepcopy(data), _hoist)
+    def _forward_inplace(self, data: Any) -> None:
+        _walk(data, _hoist)
 
-    def inverse(self, data: Any) -> Any:
-        return _walk(deepcopy(data), _unhoist)
+    def _inverse_inplace(self, data: Any) -> None:
+        _walk(data, _unhoist)
 
 
 # ----- internal -----

@@ -22,7 +22,6 @@ witness.
 """
 
 from __future__ import annotations
-from copy import deepcopy
 from typing import Any, Callable, Optional
 
 from .base import Transformation
@@ -65,11 +64,11 @@ class EnforceArrayArity(Transformation):
         "products":  {"product":  []},
     }
 
-    def forward(self, data: Any) -> Any:
-        return _walk(deepcopy(data), _enforce)
+    def _forward_inplace(self, data: Any) -> None:
+        _walk(data, _enforce)
 
-    def inverse(self, data: Any) -> Any:
-        return _walk(deepcopy(data), _restore)
+    def _inverse_inplace(self, data: Any) -> None:
+        _walk(data, _restore)
 
 
 # ----- internal -----
