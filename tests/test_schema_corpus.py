@@ -35,6 +35,7 @@ import pytest
 import gndson
 from gndson.schema.base import Pipeline
 from gndson.schema.arity import enforce_array_arity
+from gndson.schema.heterogeneous_inner_tag import drop_heterogeneous_inner_tag
 from gndson.schema.inner_tag import drop_uniform_inner_tag
 from gndson.schema.physical_quantity import (
     augment_kind,
@@ -54,11 +55,19 @@ PIPELINES_UNDER_TEST = {
         augment_kind,
         collapse_physicalQuantity_wrappers,
     ]),
+    "drop_heterogeneous_inner_tag": Pipeline([drop_heterogeneous_inner_tag]),
     "ergonomic": Pipeline([
         enforce_array_arity,
         drop_uniform_inner_tag,
         augment_kind,
         collapse_physicalQuantity_wrappers,
+    ]),
+    "ergonomic_full": Pipeline([
+        enforce_array_arity,
+        drop_uniform_inner_tag,
+        augment_kind,
+        collapse_physicalQuantity_wrappers,
+        drop_heterogeneous_inner_tag,
     ]),
 }
 

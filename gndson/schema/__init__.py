@@ -26,6 +26,10 @@ from .physical_quantity import (
     augment_kind,
     collapse_physicalQuantity_wrappers,
 )
+from .heterogeneous_inner_tag import (
+    DropHeterogeneousInnerTag,
+    drop_heterogeneous_inner_tag,
+)
 
 __all__ = [
     "Pipeline",
@@ -38,4 +42,6 @@ __all__ = [
     "CollapsePhysicalQuantityWrappers",
     "augment_kind",
     "collapse_physicalQuantity_wrappers",
+    "DropHeterogeneousInnerTag",
+    "drop_heterogeneous_inner_tag",
 ]
