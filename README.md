@@ -57,15 +57,22 @@ recognise new patterns as they are formalised.
 
 ## Install
 
-The package is pure Python (>=3.7), no external dependencies:
-
 ```bash
-pip install -e .
+pip install gndson
 ```
 
-For development (runs the test suite via `pytest`):
+Pure Python (≥ 3.7), no external dependencies. While gndson is in alpha
+you may want to pin the version:
 
 ```bash
+pip install gndson==0.1.0a1
+```
+
+### From a local checkout (development)
+
+```bash
+git clone https://github.com/IAEA-NDS/gndson
+cd gndson
 python -m venv venv
 ./venv/bin/pip install -e .[test]
 ```
